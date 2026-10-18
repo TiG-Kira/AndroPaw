@@ -1,0 +1,69 @@
+name: 编译
+
+# 移植自 Termux-Ultra（TiG-Kira/Termux-Ultra）的 .github/workflows/ci.yml。
+#
+# AndroPaw 的差异：只出 arm64-v8a（app/build.gradle.kts 的 ndk.abiFilters），
+# 因此不需要「每 ABI 一个作业」的拆分矩阵，单作业即可 —— 但缓存策略、
+# 增量优先 / 全量降级重试 / 失败判定这套逻辑完整保留，收敛在
+# ./.github/actions/gradle-build，与 release_apk.yml 共用同一份实现。
+on:
+  push:
+    paths-ignore:
+      - 'README.md'
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "Debug APK (arm64-v8a)"
+    # Termux-Ultra 用的是 ubuntu-26.04；这里取 24.04 以保证 runner 一定可用，
+    # 若要与上游完全对齐把这一行改回 ubuntu-26.04 即可（缓存键里的 RUNNER_OS
+    # 常量在 .github/actions/gradle-build/action.yml 中同步修改）。
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # miuix-*-android 只发布在 GitHub Packages，跨仓库访问时 GITHUB_TOKEN 无效，
+      # 必须用带 read:packages 的 PAT。gradle-build action 会在开头校验这两个变量。
+      GPR_USER: ${{ secrets.GPR_USER || github.repository_owner }}
+      GPR_TOKEN: ${{ secrets.GPR_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      # 刻意**不启用** setup-java 的 cache: gradle：
+      #   1) 它内部走 actions/cache，PR 上会无条件回写，挤占仓库 10GB 配额；
+      #   2) 它只覆盖 ~/.gradle，而 gradle-build action 已完整缓存
+      #      ~/.gradle/{caches,wrapper,daemon} + **/build —— 留着是重复覆盖。
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 准备 gradlew
+        run: chmod +x ./gradlew
+
+      - name: 编译 Debug APK（增量优先，失败自动全量重试一次）
+        uses: ./.github/actions/gradle-build
+        with:
+          gradle-task: ':app:assembleStandardDebug'
+          variant: debug
+          profile: arm64-v8a
+          artifact-glob: 'app/build/outputs/apk/standard/debug/*.apk'
+
+      - name: 上传 Debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: andropaw-debug-arm64-v8a
+          archive: false
+          if-no-files-found: error
+          path: app/build/outputs/apk/standard/debug/*.apk

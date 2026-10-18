@@ -1,0 +1,197 @@
+name: 发布 APK 到 Release
+
+# 移植自 Termux-Ultra（TiG-Kira/Termux-Ultra）的 .github/workflows/release_apk.yml。
+#
+# AndroPaw 的差异：
+#   1. 只有 arm64-v8a，去掉「按 ABI 并行构建 + universal」的矩阵；
+#   2. 产物由 :app:copyReleaseApks 统一产出到 release-apks/<version>/，
+#      一次构建同时给出 standard（app.andropaw.apk）与
+#      可并存安装的 v0003（app.andropaw.0003.apk）两个包；
+#   3. 签名沿用 AEmulator 的 keystore.properties 机制（rootProject.file），
+#      这里由 Secrets 现场生成，未配置时自动降级为未签名构建而不是失败。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要附加 APK 的 Release tag（workflow_dispatch 时必填；release 事件自动取触发 tag）"
+        required: false
+        type: string
+  repository_dispatch:
+    types: [trigger-release-apk]
+
+# 同一 tag 的发布构建串行化：不取消进行中的运行，避免 Release 上只挂了一半的包。
+concurrency:
+  group: release-apk-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+# 【安全】签名材料全部从 Secrets 注入，本文件不得出现任何明文。
+#
+# 需要的仓库 Secrets（未配置时产出未签名包，不会失败）：
+#   JKS_BASE64                  release 私钥库的 base64
+#   ANDROPAW_STORE_PASSWORD     keystore 口令
+#   ANDROPAW_KEY_PASSWORD       私钥口令
+#   ANDROPAW_KEY_ALIAS          alias
+# 解析见 app/build.gradle.kts 的 signingConfigs（读根目录 keystore.properties，已被 .gitignore 排除）。
+env:
+  GPR_USER: ${{ secrets.GPR_USER || github.repository_owner }}
+  GPR_TOKEN: ${{ secrets.GPR_TOKEN || secrets.GITHUB_TOKEN }}
+
+jobs:
+  # ── 1. 预检：Release 里是否已经有 APK ───────────────────────────────
+  preflight:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: 检查 Release 是否已附带 APK
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.event.client_payload.tag || github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$tag" ]; then
+            echo "::error::无法确定 tag：release 事件的 tag_name、workflow_dispatch 的 inputs.tag、repository_dispatch 的 client_payload.tag 都为空"
+            exit 1
+          fi
+          echo "目标 tag: $tag  触发源: ${{ github.event_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          api_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          assets=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$api_url" \
+            | jq -r '.assets[]?.name' 2>/dev/null | grep -i '\.apk$' || true)
+          if [ -n "$assets" ]; then
+            echo "存在 APK assets:"
+            echo "$assets"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release 中没有 APK，开始构建..."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── 2. 构建 ────────────────────────────────────────────────────────
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.skip == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      JKS_BASE64: ${{ secrets.JKS_BASE64 }}
+      ANDROPAW_STORE_PASSWORD: ${{ secrets.ANDROPAW_STORE_PASSWORD }}
+      ANDROPAW_KEY_PASSWORD: ${{ secrets.ANDROPAW_KEY_PASSWORD }}
+      ANDROPAW_KEY_ALIAS: ${{ secrets.ANDROPAW_KEY_ALIAS }}
+    steps:
+      # 刻意检出触发的 tag 而不是 main：Release 上挂的必须是这个 tag 的代码。
+      - name: 检出 tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 准备 gradlew
+        run: chmod +x ./gradlew
+
+      # app/build.gradle.kts 用 rootProject.file(storeFile) 解析，路径相对仓库根。
+      # 未配置 JKS_BASE64 时跳过：canSign=false，Release 构建照常产出未签名包。
+      - name: 解码 JKS 并生成 keystore.properties
+        run: |
+          set -uo pipefail
+          if [ -z "${JKS_BASE64:-}" ]; then
+            echo "::warning::未配置 JKS_BASE64 —— 本次 Release 将产出**未签名** APK"
+            exit 0
+          fi
+          echo "$JKS_BASE64" | base64 -d > app/andropaw-release.jks
+          test -s app/andropaw-release.jks
+          echo "JKS 写入完成：$(stat -c%s app/andropaw-release.jks) 字节"
+          {
+            echo "storeFile=app/andropaw-release.jks"
+            echo "storePassword=${ANDROPAW_STORE_PASSWORD}"
+            echo "keyAlias=${ANDROPAW_KEY_ALIAS}"
+            echo "keyPassword=${ANDROPAW_KEY_PASSWORD}"
+          } > keystore.properties
+          echo "keystore.properties 已生成"
+
+      # copyReleaseApks 依赖 assembleStandardRelease + assembleV0003Release，
+      # 并把两个包重命名后落到 release-apks/<versionName>/。
+      - name: 编译 Release APK（增量优先，失败自动全量重试一次）
+        uses: ./.github/actions/gradle-build
+        with:
+          gradle-task: ':app:copyReleaseApks'
+          variant: release
+          profile: arm64-v8a
+          artifact-glob: 'release-apks/*/*.apk'
+
+      - name: 列出产物
+        run: ls -lh release-apks/*/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: andropaw-release-apks
+          archive: false
+          if-no-files-found: error
+          path: release-apks/*/*.apk
+
+  # ── 3. 汇总上传到 Release ──────────────────────────────────────────
+  publish:
+    needs: [preflight, build]
+    if: always() && needs.preflight.outputs.skip == 'false' && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 下载全部 APK 产物
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 列出待上传文件
+        run: ls -lh dist/
+
+      - name: 上传 APK 到 Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ needs.preflight.outputs.tag }}"
+          upload_url="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          upload_base=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "$upload_url" \
+            | jq -r '.upload_url' | sed 's/{?name,label}//')
+          echo "upload_base=$upload_base"
+
+          shopt -s nullglob
+          apks=(dist/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::dist/ 下没有任何 APK 产物，无法发布"
+            exit 1
+          fi
+
+          for apk in "${apks[@]}"; do
+            name=$(basename "$apk")
+            size=$(stat -c%s "$apk")
+            echo "上传 $name ($size bytes) ..."
+            resp=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+                     -H "Authorization: token $GITHUB_TOKEN" \
+                     -H "Content-Type: application/vnd.android.package-archive" \
+                     --data-binary @"$apk" \
+                     "${upload_base}?name=${name}")
+            body=$(echo "$resp" | sed '$d')
+            http_code=$(echo "$resp" | tail -1 | sed 's/HTTP_CODE://')
+            if [ "$http_code" = "201" ]; then
+              url=$(echo "$body" | jq -r '.html_url // .url // empty')
+              echo "✅ 上传成功: $url"
+            else
+              echo "❌ 上传失败 HTTP $http_code"
+              echo "$body"
+              exit 1
+            fi
+          done
