@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import java.io.File
 import java.util.concurrent.TimeUnit

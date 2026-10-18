@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 /** Хост-помощник libaemuhost.so (native/hostjni). На Android 8–9 fdsan нет — библиотека не грузится, это не ошибка. */
 object HostNative {

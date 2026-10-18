@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.media.AudioAttributes
 import android.media.AudioFormat

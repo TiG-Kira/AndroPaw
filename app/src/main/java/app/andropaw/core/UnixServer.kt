@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.net.LocalServerSocket
 import android.net.LocalSocket

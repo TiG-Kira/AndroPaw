@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.content.Context
 import android.os.Process as AProcess
@@ -573,26 +573,26 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 // 2.3–4.1 look up "bluetooth" instead; without it BluetoothAdapter is null and the vendor's Bluetooth apps crash
                 val btName = if (img.api >= 17) "bluetooth_manager" else "bluetooth"
                 startService(GuestService("aemu-bt", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.BtStub", btName), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.BtStub", btName), optional = true))
             }
             // (well before zygote: apexd of 10+ looks for vold first and only then registers its own service, which the
             // package manager requires)
             if (svc.name == "surfaceflinger" && engine == Engine.N64 && kernel.binderVold && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-vold") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-vold", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.VoldStub") + (if (kernel.volumeAtUserStart) listOf("userstart") else emptyList()), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.VoldStub") + (if (kernel.volumeAtUserStart) listOf("userstart") else emptyList()), optional = true))
             }
             // 5.0–7.x: a registered network, otherwise ConnectivityService says "no active network" and browsers stay offline
             if (svc.name == "zygote" && (if (engine == Engine.N64) kernel.registeredNetwork else img.api in 21..25) && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-net") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-net", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.NetStub") + (if (Kernel64.forApi(img.api).ethernetStandIn) listOf("ethernet") else emptyList()), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.NetStub") + (if (Kernel64.forApi(img.api).ethernetStandIn) listOf("ethernet") else emptyList()), optional = true))
             }
             if (svc.name == "zygote" && engine == Engine.N64 && kernel.apexStandIn && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 apexStandInList()
                 synchronized(procs) { procs.remove("aemu-apex") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-apex", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.ApexStub"), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.ApexStub"), optional = true))
             }
             // services the firmware's programs call unchecked and nothing here registers
             if (svc.name == "zygote" && engine == Engine.N64 && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
@@ -600,7 +600,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     runCatching { String(File(paths.root, user.substringBefore('#')).readBytes(), Charsets.ISO_8859_1).contains(user.substringAfter('#', name)) }.getOrDefault(false) }.keys
                 synchronized(procs) { procs.remove("aemu-standin") }?.let { runCatching { it.destroyForcibly() } }
                 if (names.isNotEmpty()) startService(GuestService("aemu-standin", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.StandIn") + names, optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.StandIn") + names, optional = true))
             }
             startService(svc)
             svc.waitSocket?.let { sock -> waitFor("socket $sock", 20_000) { paths.socket(sock).exists() } }
@@ -1270,7 +1270,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     val shellPrefix: String get() = "export PATH=/system/bin:/system/xbin:\$PATH; $toolWrappers"
 
     /**
-     * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.aemu.stub.Run, which
+     * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.andropaw.stub.Run, which
      * calls System.exit() after main(): left alone, the tool's VM waits forever for its binder thread and the command
      * never returns. Jar and class come from each tool's own script in /system/bin.
      */
@@ -1283,7 +1283,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val text = runCatching { f.readText(Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             val cls = Regex("app_process\\S*\\s+\\S+\\s+([A-Za-z_][\\w.$]*\\.[A-Z][\\w$]*)").find(text)?.groupValues?.get(1) ?: return@forEach
             val jar = Regex("framework/([\\w.-]+\\.jar)").find(text)?.groupValues?.get(1) ?: return@forEach
-            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.aemu.stub.Run $cls \"\$@\"; }; ")
+            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.andropaw.stub.Run $cls \"\$@\"; }; ")
         }
         sb.toString()
     }

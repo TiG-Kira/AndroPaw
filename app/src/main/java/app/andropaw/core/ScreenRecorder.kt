@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.graphics.Bitmap
 import android.graphics.Rect

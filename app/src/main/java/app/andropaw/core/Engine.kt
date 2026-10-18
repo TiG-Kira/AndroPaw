@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 /**
  * Набор движка: хостовые исполняемые файлы (лежат в nativeLibraryDir как lib*.so)

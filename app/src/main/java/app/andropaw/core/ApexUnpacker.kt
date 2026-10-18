@@ -1,9 +1,9 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.system.Os
-import app.aemu.importer.ChannelSource
-import app.aemu.importer.ErofsImage
-import app.aemu.importer.Ext4Reader
+import app.andropaw.importer.ChannelSource
+import app.andropaw.importer.ErofsImage
+import app.andropaw.importer.Ext4Reader
 import java.io.File
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption

@@ -1,7 +1,7 @@
-# Ключи строк интерфейса AEmulator. Порядок важен: переводы в langs/*.py идут в том же порядке.
+# Ключи строк интерфейса AndroPaw. Порядок важен: переводы в langs/*.py идут в том же порядке.
 KEYS = [
     "channel_vm", "vm_running", "vm_running_hint",
-    "lib_subtitle", "help", "add_firmware", "settings",
+    "lib_subtitle", "help", "add_firmware", "tab_emulator", "settings",
     "delete_title", "delete_text", "delete", "cancel", "name", "save",
     "storage_title", "storage_text", "allow",
     "empty_title", "empty_text", "empty_help",

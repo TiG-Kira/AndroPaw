@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -258,7 +258,7 @@ class TreeFixer(
         val f = File(root, "system/usr/keylayout/dhd-touch.kl")
         val vf = File(root, "vendor/usr/keylayout/dhd-touch.kl")
         val text = buildString {
-            append("# AEmulator: navigation bar and hardware keys of the emulator\n")
+            append("# AndroPaw: navigation bar and hardware keys of the emulator\n")
             append("key ${InputService.KEY_HOME} HOME WAKE\n")
             append("key 172 HOME WAKE\n")
             append("key ${InputService.KEY_BACK} BACK WAKE_DROPPED\n")
@@ -283,7 +283,7 @@ class TreeFixer(
         val targets = listOf(
             f, vf,
             File(root, "system/usr/keylayout/Vendor_18d1_Product_0001.kl"),
-            File(root, "system/usr/keylayout/AEmulator_Touchscreen.kl")
+            File(root, "system/usr/keylayout/AndroPaw_Touchscreen.kl")
         )
         for (target in targets) {
             if (target == vf && !File(root, "vendor/usr/keylayout").isDirectory) continue
@@ -308,7 +308,7 @@ class TreeFixer(
                         changed = true
                     }
                     if (!s.contains("APP_SWITCH") && img.api >= 11) {
-                        s += "\n# AEmulator navigation recents keys\nkey 580 APP_SWITCH\nkey 187 APP_SWITCH\nkey 254 APP_SWITCH\n"
+                        s += "\n# AndroPaw navigation recents keys\nkey 580 APP_SWITCH\nkey 187 APP_SWITCH\nkey 254 APP_SWITCH\n"
                         changed = true
                     }
                     if (changed) kl.writeText(s)
@@ -1593,7 +1593,7 @@ class TreeFixer(
         runCatching {
             if (cur.isFile && !rom.isFile) cur.copyTo(rom)
             val text = """
-                |# создано AEmulator: единственный модуль — звуковой HAL эмулятора
+                |# создано AndroPaw: единственный модуль — звуковой HAL эмулятора
                 |global_configuration {
                 |  attached_output_devices AUDIO_DEVICE_OUT_SPEAKER
                 |  default_output_device AUDIO_DEVICE_OUT_SPEAKER
@@ -1630,10 +1630,10 @@ class TreeFixer(
         val xml = File(root, "vendor/etc/audio_policy_configuration.xml")
         if (img.engine == Engine.N64 && kernel.audioPolicyXml && File(root, "system/etc/audio_policy_configuration.xml").isFile && File(root, "vendor/etc").isDirectory) runCatching {
             val own = File(root, "system/.aemu-parked/vendor#etc#audio_policy_configuration.xml")
-            if (xml.isFile && !own.exists() && !xml.readText().contains("AEmulator")) { own.parentFile?.mkdirs(); xml.renameTo(own) }
+            if (xml.isFile && !own.exists() && !xml.readText().contains("AndroPaw")) { own.parentFile?.mkdirs(); xml.renameTo(own) }
             val text = """
                 |<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-                |<!-- AEmulator: the one module is the engine's audio HAL -->
+                |<!-- AndroPaw: the one module is the engine's audio HAL -->
                 |<audioPolicyConfiguration version="1.0" xmlns:xi="http://www.w3.org/2001/XInclude">
                 |    <globalConfiguration speaker_drc_enabled="false"/>
                 |    <modules>

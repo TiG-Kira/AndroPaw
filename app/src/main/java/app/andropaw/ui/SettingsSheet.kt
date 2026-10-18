@@ -1,6 +1,6 @@
-package app.aemu.ui
+package app.andropaw.ui
 
-import app.aemu.R
+import app.andropaw.R
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -25,7 +24,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,10 +38,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import app.aemu.core.CpuInfo
-import app.aemu.core.Engine
-import app.aemu.core.GuestImage
-import app.aemu.core.VmSettings
+import app.andropaw.core.CpuInfo
+import app.andropaw.core.Engine
+import app.andropaw.core.GuestImage
+import app.andropaw.core.VmSettings
 
 private data class Res(val label: String, val w: Int, val h: Int, val dpi: Int)
 
@@ -70,16 +68,12 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
             if (s.legacyEngine && img.api < 14) {
                 Text(stringResource(R.string.vs_fixed_2x), style = MaterialTheme.typography.bodyMedium)
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween), modifier = Modifier.fillMaxWidth()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(ConnectedButtonSpace), modifier = Modifier.fillMaxWidth()) {
                     RESOLUTIONS.forEachIndexed { i, r ->
-                        ToggleButton(
+                        ConnectedToggleButton(
                             checked = s.width == r.w && s.height == r.h,
                             onCheckedChange = { s = s.copy(width = r.w, height = r.h, density = r.dpi) },
-                            shapes = when (i) {
-                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                RESOLUTIONS.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                            },
+                            shape = connectedButtonShapes(i, RESOLUTIONS.lastIndex),
                             modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
                         ) { Text(r.label) }
                     }
@@ -202,7 +196,7 @@ private fun NumField(label: String, value: Int, modifier: Modifier, set: (Int) -
 @Composable
 private fun RecoverySection(img: GuestImage) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val paths = remember(img.id) { app.aemu.core.VmPaths(ctx, img.id) }
+    val paths = remember(img.id) { app.andropaw.core.VmPaths(ctx, img.id) }
     var status by remember { mutableStateOf(recoveryStatus(paths)) }
     var busy by remember { mutableStateOf(false) }
     val failed = stringResource(R.string.vs_recovery_failed)
@@ -213,7 +207,7 @@ private fun RecoverySection(img: GuestImage) {
         Thread {
             val ok = runCatching {
                 val data = ctx.contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-                app.aemu.core.RecoveryImage.install(paths, data) {}
+                app.andropaw.core.RecoveryImage.install(paths, data) {}
             }.getOrDefault(false)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 busy = false
@@ -233,9 +227,9 @@ private fun RecoverySection(img: GuestImage) {
     )
 }
 
-private fun recoveryStatus(paths: app.aemu.core.VmPaths): String? {
-    if (!app.aemu.core.RecoveryImage.installed(paths)) return null
-    val dir = app.aemu.core.RecoveryImage.dir(paths)
+private fun recoveryStatus(paths: app.andropaw.core.VmPaths): String? {
+    if (!app.andropaw.core.RecoveryImage.installed(paths)) return null
+    val dir = app.andropaw.core.RecoveryImage.dir(paths)
     val prop = runCatching { java.io.File(dir, "default.prop").readText() }.getOrDefault("")
     val twrp = Regex("""ro\.twrp\.version=(\S+)""").find(prop)?.groupValues?.get(1)
     return when {

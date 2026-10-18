@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "Les anciennes ROM Android sur un téléphone moderne",
     "help": "Fichiers pris en charge",
     "add_firmware": "Ajouter une ROM",
+    "tab_emulator": "Émulateur",
     "settings": "Paramètres",
     "delete_title": "Supprimer « %1$s » ?",
     "delete_text": "Le système et toutes ses données seront supprimés (%1$s). Le dossier partagé de la carte mémoire est conservé.",
@@ -13,7 +14,7 @@ S = {
     "name": "Nom",
     "save": "Enregistrer",
     "storage_title": "Dossier partagé des systèmes",
-    "storage_text": "Autorisez l’accès à tous les fichiers : la carte mémoire de chaque système sera dans le dossier AEmulator du stockage interne, pratique pour les APK, la musique et les photos.",
+    "storage_text": "Autorisez l’accès à tous les fichiers : la carte mémoire de chaque système sera dans le dossier AndroPaw du stockage interne, pratique pour les APK, la musique et les photos.",
     "allow": "Autoriser",
     "empty_title": "Aucun système pour l’instant",
     "empty_text": "Ajoutez une ROM ARM pour Android 2.3–6.0 : ZIP recovery, archive Odin (.tar.md5), system.img ou image d’usine.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin (TON)",
     "as_copied": "Adresse copiée",
     "as_version": "Version %1$s",
-    "as_about": "AEmulator fait tourner les anciennes ROM Android sur les téléphones modernes. Gratuit et open source.",
+    "as_about": "AndroPaw fait tourner les anciennes ROM Android sur les téléphones modernes. Gratuit et open source.",
 }

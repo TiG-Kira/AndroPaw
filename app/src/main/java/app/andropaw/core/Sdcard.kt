@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.content.Context
 import android.os.Environment
@@ -7,7 +7,7 @@ import java.io.File
 import java.nio.file.Files
 
 /**
- * Общая папка «карты памяти»: лежит в памяти телефона (Внутренний накопитель/AEmulator/<образ>),
+ * Общая папка «карты памяти»: лежит в памяти телефона (Внутренний накопитель/AndroPaw/<образ>),
  * гость видит её по своим путям (/mnt/sdcard, /sdcard, /storage/…) — их подменяет qemu (DHD_SDCARD).
  */
 object Sdcard {
@@ -20,7 +20,7 @@ object Sdcard {
     fun setup(ctx: Context, paths: VmPaths, img: GuestImage, log: (String) -> Unit): File? {
         val d = choose(ctx, img, log) ?: return null
         LAYOUT.forEach { File(d, it).mkdirs() }
-        val readme = File(d, "README-AEmulator.txt")
+        val readme = File(d, "README-AndroPaw.txt")
         if (!readme.isFile) runCatching {
             readme.writeText(
                 "Shared folder of image \"${img.name}\".\n" +
@@ -49,7 +49,7 @@ object Sdcard {
         val tries = ArrayList<File>()
         runCatching {
             if (Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED) {
-                tries.add(File(File(Environment.getExternalStorageDirectory(), "AEmulator"), "$safe (${img.id})"))
+                tries.add(File(File(Environment.getExternalStorageDirectory(), "AndroPaw"), "$safe (${img.id})"))
             }
         }
         ctx.getExternalFilesDir(null)?.let { tries.add(File(it, "sdcard-${img.id}")) }

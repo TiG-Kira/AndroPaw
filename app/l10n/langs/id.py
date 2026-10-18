@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "Firmware Android klasik di ponsel modern",
     "help": "File yang didukung",
     "add_firmware": "Tambah firmware",
+    "tab_emulator": "Emulator",
     "settings": "Setelan",
     "delete_title": "Hapus “%1$s”?",
     "delete_text": "Sistem dan semua datanya akan dihapus (%1$s). Folder kartu memori bersama tetap ada.",
@@ -13,7 +14,7 @@ S = {
     "name": "Nama",
     "save": "Simpan",
     "storage_title": "Folder bersama untuk sistem",
-    "storage_text": "Izinkan akses ke semua file: kartu memori tiap sistem akan berada di folder AEmulator penyimpanan internal — praktis untuk APK, musik, dan foto.",
+    "storage_text": "Izinkan akses ke semua file: kartu memori tiap sistem akan berada di folder AndroPaw penyimpanan internal — praktis untuk APK, musik, dan foto.",
     "allow": "Izinkan",
     "empty_title": "Belum ada sistem",
     "empty_text": "Tambahkan firmware ARM Android 2.3–6.0: ZIP recovery, arsip Odin (.tar.md5), system.img, atau factory image.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin (TON)",
     "as_copied": "Alamat disalin",
     "as_version": "Versi %1$s",
-    "as_about": "AEmulator menjalankan firmware Android klasik di ponsel modern. Gratis dan sumber terbuka.",
+    "as_about": "AndroPaw menjalankan firmware Android klasik di ponsel modern. Gratis dan sumber terbuka.",
 }

@@ -1,6 +1,6 @@
-package app.aemu.ui
+package app.andropaw.ui
 
-import app.aemu.R
+import app.andropaw.R
 import androidx.compose.ui.res.stringResource
 import android.annotation.SuppressLint
 import android.content.Context
@@ -102,10 +102,9 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -123,11 +122,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.aemu.core.Engine
-import app.aemu.core.GuestLog
-import app.aemu.core.GuestVm
-import app.aemu.core.ImageStore
-import app.aemu.core.InputService
+import app.andropaw.core.Engine
+import app.andropaw.core.GuestLog
+import app.andropaw.core.GuestVm
+import app.andropaw.core.ImageStore
+import app.andropaw.core.InputService
 import kotlinx.coroutines.delay
 import kotlin.concurrent.thread
 
@@ -143,8 +142,8 @@ class VmActivity : ComponentActivity() {
     /** the guest's screen size, for what takes frames off it (VNC, recording) */
     private var guestW = 0
     private var guestH = 0
-    private var vnc: app.aemu.core.VncServer? = null
-    private var recorder: app.aemu.core.ScreenRecorder? = null
+    private var vnc: app.andropaw.core.VncServer? = null
+    private var recorder: app.andropaw.core.ScreenRecorder? = null
     private val vncOn = androidx.compose.runtime.mutableStateOf(false)
     private val recOn = androidx.compose.runtime.mutableStateOf(false)
     private val grabThread by lazy { android.os.HandlerThread("frame-grab").apply { start() } }
@@ -152,14 +151,14 @@ class VmActivity : ComponentActivity() {
     private lateinit var box: FrameLayout
     private var state by mutableStateOf(GuestVm.State.STOPPED)
     /** the guest's notification LED and where the guest screen starts (the LED sits just above it) */
-    private var led by mutableStateOf<app.aemu.core.Lights.Led?>(null)
+    private var led by mutableStateOf<app.andropaw.core.Lights.Led?>(null)
     /** this system's setting "Notification light" (the settings sheet changes it while the system runs) */
     private var showLed by mutableStateOf(true)
     private var guestTopPx by mutableStateOf(0)
     private val logLines = mutableStateListOf<String>()
 
     @SuppressLint("ClickableViewAccessibility")
-    override fun attachBaseContext(base: Context) = super.attachBaseContext(app.aemu.AppPrefs.wrap(base))
+    override fun attachBaseContext(base: Context) = super.attachBaseContext(app.andropaw.AppPrefs.wrap(base))
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -168,7 +167,7 @@ class VmActivity : ComponentActivity() {
         val id = intent.getStringExtra(EXTRA_ID)
         val cur = VmHost.vm
         val img = ((if (id != null) ImageStore.get(this, id) else null) ?: cur?.img)
-            ?.let { if (cur?.img?.id == it.id) it else app.aemu.importer.Analyzer.refresh(this, it).effective() }
+            ?.let { if (cur?.img?.id == it.id) it else app.andropaw.importer.Analyzer.refresh(this, it).effective() }
         if (img == null) { finish(); return }
         if (cur != null && cur.img.id != img.id && cur.state != GuestVm.State.STOPPED) {
             // в процессе уже живёт другая машина — её надо сначала остановить
@@ -195,7 +194,7 @@ class VmActivity : ComponentActivity() {
         guestW = gw; guestH = gh
         guest = GuestScreen(this, gw, gh).apply {
             input = vm.input
-            fb = if (vm.recoveryMode) app.aemu.core.RecoveryImage.fb(vm.paths) else vm.paths.fb
+            fb = if (vm.recoveryMode) app.andropaw.core.RecoveryImage.fb(vm.paths) else vm.paths.fb
             if (vm.recoveryMode) pages = 2
         }
         // 5.0+ renders through the standalone glserverd into fb0 (see GuestVm.glUp), shown like the software path
@@ -203,13 +202,13 @@ class VmActivity : ComponentActivity() {
         // the arm64 engine's GLES bridge shows SurfaceFlinger's frames in the same view, straight from the GPU; until
         // the first of them (and with the software renderer) the screen is fb0 as before
         val direct = vm.engine == Engine.N64 && vm.kernel.gpuBridge64 && s.gpu && !vm.recoveryMode
-        if (direct) { surfaceView.holder.setFixedSize(gw, gh); guest.direct = { app.aemu.core.GlHost.presented() } }
+        if (direct) { surfaceView.holder.setFixedSize(gw, gh); guest.direct = { app.andropaw.core.GlHost.presented() } }
         surfaceView.visibility = if (useBridge || direct) View.VISIBLE else View.GONE
         guest.passthrough = useBridge
         box.addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
         box.addView(guest, FrameLayout.LayoutParams(-1, -1))
         root.addView(box, FrameLayout.LayoutParams(0, 0))
-        val overlay = ComposeView(this).apply { setContent { AemuTheme(forceDark = true) { Overlay() } } }
+        val overlay = ComposeView(this).apply { setContent { AndroPawTheme(forceDark = true) { Overlay() } } }
         root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
 
@@ -265,10 +264,10 @@ class VmActivity : ComponentActivity() {
         }
     }
 
-    /** Отладка: adb shell am broadcast -a app.aemu.SHELL --es cmd "dumpsys power" → run/shell.out */
+    /** Отладка: adb shell am broadcast -a app.andropaw.SHELL --es cmd "dumpsys power" → run/shell.out */
     private var shellRx: android.content.BroadcastReceiver? = null
     private fun registerShell() {
-        if (!app.aemu.BuildConfig.DEBUG) return
+        if (!app.andropaw.BuildConfig.DEBUG) return
         val rx = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) {
                 // --es keys "116d 115 116u": raw guest key codes, d/u = down/up only, bare = press
@@ -303,7 +302,7 @@ class VmActivity : ComponentActivity() {
             }
         }
         shellRx = rx
-        val f = android.content.IntentFilter("app.aemu.SHELL")
+        val f = android.content.IntentFilter("app.andropaw.SHELL")
         if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(rx, f, Context.RECEIVER_EXPORTED) else registerReceiver(rx, f)
     }
 
@@ -403,7 +402,7 @@ class VmActivity : ComponentActivity() {
      */
     private fun screenshot() {
         val name = "aemu-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".png"
-        val hostDir = app.aemu.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Pictures") }
+        val hostDir = app.andropaw.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Pictures") }
         if (hostDir == null) { toast(getString(R.string.m_failed)); return }
         fun save(b: android.graphics.Bitmap) = thread {
             val ok = runCatching {
@@ -451,7 +450,7 @@ class VmActivity : ComponentActivity() {
         if (guestW <= 0 || guestH <= 0) { toast(getString(R.string.m_failed)); return }
         val password = (1..8).map { "abcdefghijkmnpqrstuvwxyz23456789".random() }.joinToString("")
         val bmp = android.graphics.Bitmap.createBitmap(guestW, guestH, android.graphics.Bitmap.Config.ARGB_8888)
-        val server = app.aemu.core.VncServer(app.aemu.core.VncServer.DEFAULT_PORT, password, guestW, guestH, vm.img.name,
+        val server = app.andropaw.core.VncServer(app.andropaw.core.VncServer.DEFAULT_PORT, password, guestW, guestH, vm.img.name,
             { px -> if (grabFrame(bmp)) { bmp.getPixels(px, 0, guestW, 0, 0, guestW, guestH); true } else false }, vm.input, vm::log)
         if (!server.start()) { toast(getString(R.string.m_failed)); return }
         vnc = server; vncOn.value = true
@@ -459,7 +458,7 @@ class VmActivity : ComponentActivity() {
             java.net.NetworkInterface.getNetworkInterfaces().asSequence().filter { it.isUp && !it.isLoopback }
                 .flatMap { it.inetAddresses.asSequence() }.firstOrNull { it is java.net.Inet4Address }?.hostAddress
         }.getOrNull() ?: "127.0.0.1"
-        val where = getString(R.string.m_vnc_started, "$ip:${app.aemu.core.VncServer.DEFAULT_PORT}", password)
+        val where = getString(R.string.m_vnc_started, "$ip:${app.andropaw.core.VncServer.DEFAULT_PORT}", password)
         vm.log("vnc: $where")
         runOnUiThread { Toast.makeText(this, where, Toast.LENGTH_LONG).show() }
     }
@@ -475,10 +474,10 @@ class VmActivity : ComponentActivity() {
             }
             return
         }
-        val dir = app.aemu.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Movies") }
+        val dir = app.andropaw.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Movies") }
         if (dir == null || guestW <= 0 || guestH <= 0) { toast(getString(R.string.m_failed)); return }
         val name = "aemu-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".mp4"
-        val r = app.aemu.core.ScreenRecorder(java.io.File(dir, name), guestW, guestH, ::grabFrame, vm::log)
+        val r = app.andropaw.core.ScreenRecorder(java.io.File(dir, name), guestW, guestH, ::grabFrame, vm::log)
         if (!r.start()) { toast(getString(R.string.m_failed)); return }
         recorder = r; recOn.value = true
     }
@@ -486,7 +485,7 @@ class VmActivity : ComponentActivity() {
     // APK picked on the host: copied into the shared card folder, then installed by the guest's package manager
     private val pickApk = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
-        val dir = app.aemu.core.Sdcard.hostDir(vm.paths)
+        val dir = app.andropaw.core.Sdcard.hostDir(vm.paths)
         if (dir == null) { toast(getString(R.string.m_failed)); return@registerForActivityResult }
         toast(getString(R.string.m_install_apk_start))
         thread {
@@ -495,7 +494,7 @@ class VmActivity : ComponentActivity() {
             }.isSuccess
             if (!ok) { toast(getString(R.string.m_failed)); return@thread }
             val out = runCatching { vm.guestShell("pm install -r " + vm.img.sdcardPath.trimEnd('/') + "/aemu-install.apk", 300_000) }.getOrElse { it.toString() }
-            runCatching { app.aemu.core.TreeFixer(this@VmActivity, vm.paths, vm.img, vm::log).seedOwners() }
+            runCatching { app.andropaw.core.TreeFixer(this@VmActivity, vm.paths, vm.img, vm::log).seedOwners() }
             toast(out.trim().lines().lastOrNull { it.isNotBlank() }?.take(200) ?: getString(R.string.m_failed))
         }
     }
@@ -512,7 +511,7 @@ class VmActivity : ComponentActivity() {
     @Composable
     private fun SmsDialog(onDone: () -> Unit) {
         var from by remember { mutableStateOf("+10000000000") }
-        var body by remember { mutableStateOf("Hello from AEmulator") }
+        var body by remember { mutableStateOf("Hello from AndroPaw") }
         AlertDialog(onDismissRequest = onDone,
             title = { Text(stringResource(R.string.m_sms)) },
             text = {
@@ -573,7 +572,7 @@ class VmActivity : ComponentActivity() {
                         Switch(on, { v -> if (v) vm.adb.start() else vm.adb.stop(); on = vm.adb.running })
                     }
                     if (on) {
-                        val ips = app.aemu.core.AdbServer.addresses()
+                        val ips = app.andropaw.core.AdbServer.addresses()
                         for (ip in ips.ifEmpty { listOf("127.0.0.1") })
                             Text("adb connect $ip:${vm.adb.port}", style = MaterialTheme.typography.bodyLarge,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
@@ -678,7 +677,7 @@ class VmActivity : ComponentActivity() {
         val running = state == GuestVm.State.RUNNING && !vm.recoveryMode
         var seconds by remember { mutableStateOf(0L) }
         var frames by remember { mutableStateOf(0L) }
-        LaunchedEffect(Unit) { while (true) { if (vm.recoveryMode) guest.format = vm.recoveryFormat else if (vm.engine == app.aemu.core.Engine.N64) guest.format = 1; seconds = vm.bootSeconds(); frames = if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings; delay(500) } }
+        LaunchedEffect(Unit) { while (true) { if (vm.recoveryMode) guest.format = vm.recoveryFormat else if (vm.engine == app.andropaw.core.Engine.N64) guest.format = 1; seconds = vm.bootSeconds(); frames = if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings; delay(500) } }
         // как только гость начал рисовать — карточку убираем, остаётся маленький индикатор
         val drawing = frames > 30
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -701,7 +700,7 @@ class VmActivity : ComponentActivity() {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
                     modifier = Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        LoadingIndicator(Modifier.size(24.dp))
+                        CircularProgressIndicator(Modifier.size(24.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(stringResource(R.string.vm_booting_short, seconds.toInt()), style = MaterialTheme.typography.labelMedium)
                     }
@@ -784,7 +783,7 @@ class VmActivity : ComponentActivity() {
                         onClick = { menu = false; rebootVm() })
                     DropdownMenuItem(text = { Text(stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery)) },
                         leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
-                        enabled = vm.recoveryMode || app.aemu.core.RecoveryImage.installed(vm.paths),
+                        enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
                         onClick = { menu = false; rebootVm(!vm.recoveryMode) })
                     DropdownMenuItem(text = { Text(stringResource(R.string.shutdown)) }, leadingIcon = { Icon(Icons.Rounded.Close, null) },
                         onClick = { menu = false; stopVm() })
@@ -811,7 +810,7 @@ class VmActivity : ComponentActivity() {
     @Composable
     private fun NavBar(modifier: Modifier) {
         val compact = vm.settings.navSize == 0
-        val keys = remember { vm.settings.navKeys.split(',').filter { it in app.aemu.core.VmSettings.NAV_ALL } }
+        val keys = remember { vm.settings.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL } }
         if (keys.isEmpty()) return
         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f), modifier = modifier) {
             Row(Modifier.padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 2.dp else 6.dp),
@@ -889,7 +888,7 @@ class VmActivity : ComponentActivity() {
      * a dot. Blinks with the guest's on/off times.
      */
     @Composable
-    private fun LedIndicator(l: app.aemu.core.Lights.Led, modifier: Modifier) {
+    private fun LedIndicator(l: app.andropaw.core.Lights.Led, modifier: Modifier) {
         var on by remember(l) { mutableStateOf(true) }
         LaunchedEffect(l) {
             if (l.onMs > 0 && l.offMs > 0) while (true) { on = true; delay(l.onMs.toLong()); on = false; delay(l.offMs.toLong()) }
@@ -947,7 +946,7 @@ class VmActivity : ComponentActivity() {
                         Button(onClick = { thread { vm.stop(); vm.boot() } }) { Text(stringResource(R.string.retry)) }
                     }
                 } else {
-                    LoadingIndicator(Modifier.size(64.dp))
+                    CircularProgressIndicator(Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
                     Text(vm.img.name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(vm.img.displayVersion, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1047,7 +1046,7 @@ class VmActivity : ComponentActivity() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(stringResource(R.string.m_terminal), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (busy) LoadingIndicator(Modifier.size(32.dp))
+                    if (busy) CircularProgressIndicator(Modifier.size(32.dp))
                     IconButton(onClick = { copyLog(termLines.toList()) }) { Icon(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) }
                     FilledTonalIconButton(onClick = onClose) { Icon(Icons.Rounded.Close, stringResource(R.string.close)) }
                 }
@@ -1093,7 +1092,7 @@ class VmActivity : ComponentActivity() {
 
     private fun copyLog(lines: List<String>) {
         val cm = getSystemService(ClipboardManager::class.java)
-        cm.setPrimaryClip(ClipData.newPlainText("AEmulator log", lines.joinToString("\n")))
+        cm.setPrimaryClip(ClipData.newPlainText("AndroPaw log", lines.joinToString("\n")))
         Toast.makeText(this, R.string.log_copied, Toast.LENGTH_SHORT).show()
     }
 

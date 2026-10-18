@@ -1,8 +1,8 @@
-package app.aemu
+package app.andropaw
 
 import android.content.Context
 import android.content.res.Configuration
-import app.aemu.core.VmSettings
+import app.andropaw.core.VmSettings
 import java.util.Locale
 
 /** Настройки самого приложения (не отдельной системы): язык, тема, умолчания для новых систем. */

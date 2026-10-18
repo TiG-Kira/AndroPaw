@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "최신 휴대폰에서 즐기는 클래식 Android 펌웨어",
     "help": "지원 파일",
     "add_firmware": "펌웨어 추가",
+    "tab_emulator": "에뮬레이터",
     "settings": "설정",
     "delete_title": "“%1$s”을(를) 삭제할까요?",
     "delete_text": "시스템과 그 안의 모든 데이터가 삭제됩니다(%1$s). 공유 메모리 카드 폴더는 남습니다.",
@@ -13,7 +14,7 @@ S = {
     "name": "이름",
     "save": "저장",
     "storage_title": "시스템 공유 폴더",
-    "storage_text": "모든 파일 접근을 허용하면 각 시스템의 메모리 카드가 내부 저장소의 AEmulator 폴더에 생겨 APK, 음악, 사진을 넣기 편합니다.",
+    "storage_text": "모든 파일 접근을 허용하면 각 시스템의 메모리 카드가 내부 저장소의 AndroPaw 폴더에 생겨 APK, 음악, 사진을 넣기 편합니다.",
     "allow": "허용",
     "empty_title": "아직 시스템이 없습니다",
     "empty_text": "Android 2.3–6.0용 ARM 펌웨어를 추가하세요: 리커버리 ZIP, Odin 아카이브(.tar.md5), system.img 또는 팩토리 이미지.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin(TON)",
     "as_copied": "주소가 복사되었습니다",
     "as_version": "버전 %1$s",
-    "as_about": "AEmulator는 최신 휴대폰에서 클래식 Android 펌웨어를 실행합니다. 무료 오픈 소스입니다.",
+    "as_about": "AndroPaw는 최신 휴대폰에서 클래식 Android 펌웨어를 실행합니다. 무료 오픈 소스입니다.",
 }

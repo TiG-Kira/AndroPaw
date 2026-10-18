@@ -17,3 +17,12 @@ keystore.properties
 *.keystore
 release-apks/
 .kotlin/
+
+# local login/dev helpers (contain no secrets, but not part of the app)
+github_login.bat
+andropaw_secrets.bat
+andropaw_repo.bat
+restore_mirror.sh
+restore_all.sh
+restore_missing.sh
+fix_l10n_brand.py

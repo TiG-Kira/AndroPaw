@@ -1,4 +1,4 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -6,11 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,22 +35,16 @@ import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,9 +53,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import app.aemu.update.AppUpdateManager
-import app.aemu.update.ReleaseInfo
-import app.aemu.update.UpdateState
+import app.andropaw.update.AppUpdateManager
+import app.andropaw.update.ReleaseInfo
+import app.andropaw.update.UpdateState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,39 +70,33 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import app.aemu.AppPrefs
-import app.aemu.BuildConfig
-import app.aemu.R
+import app.andropaw.AppPrefs
+import app.andropaw.BuildConfig
+import app.andropaw.R
 
-/** Ссылки проекта — одни и те же в приложении, README и на сайте. */
+/** Project links — kept in sync across the app, README and the website. */
 object Links {
-    const val SITE = "https://aemulator.gt.tc"
-    const val GITHUB = "https://github.com/uxazu/aemulator"
-    const val CHANNEL = "https://t.me/aemulatorofficial"
+    const val SITE = "https://andropaw.app"
+    const val GITHUB = "https://github.com/uxazu/andropaw"
+    const val CHANNEL = "https://t.me/andropaw"
     const val AUTHOR = "https://github.com/uxazu"
     const val ORIGINAL = "https://t.me/istratii_tech1"
     const val DONATE = "https://dalink.to/uxazu"
 }
 
-class AppSettingsActivity : ComponentActivity() {
-    override fun attachBaseContext(base: Context) = super.attachBaseContext(AppPrefs.wrap(base))
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
-        super.onCreate(savedInstanceState)
-        setContent { AemuTheme { AppSettings(onBack = ::finish, onRestyle = ::restart) } }
-    }
-
-    /** Язык применяется пересозданием активности для применения нового ContextWrapper с локалью. */
-    private fun restart() {
-        recreate()
-    }
-}
-
+/**
+ * The Settings tab of the home screen: appearance, defaults, updates, links and support.
+ *
+ * Rendered inside the glass shell's [GlassTopAppBar] + [GlassNavigationBar], so it carries no
+ * top bar of its own — [padding] is the glass scaffold's content insets.
+ */
 @Composable
-private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
+fun SettingsContent(
+    onRestyle: () -> Unit,
+    padding: PaddingValues,
+) {
     val ctx = LocalContext.current
-    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var langDialog by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
@@ -139,7 +123,7 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
                     }
                 },
                 onFailure = { err ->
-                    updateState = UpdateState.Error(err.localizedMessage ?: "Ошибка сети")
+                    updateState = UpdateState.Error(err.localizedMessage ?: "Network error")
                 }
             )
         }
@@ -156,7 +140,7 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
                 AppUpdateManager.installApk(ctx, file)
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
-                    updateState = UpdateState.Error(e.localizedMessage ?: "Ошибка загрузки")
+                    updateState = UpdateState.Error(e.localizedMessage ?: "Download error")
                 }
             }
         }
@@ -170,101 +154,90 @@ private fun AppSettings(onBack: () -> Unit, onRestyle: () -> Unit) {
     val langTag = AppPrefs.language(ctx)
     val langName = AppPrefs.LANGUAGES.firstOrNull { it.first == langTag }?.second?.ifEmpty { null } ?: stringResource(R.string.as_lang_system)
 
-    Scaffold(
+    LazyColumn(
         modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
-        topBar = {
-            LargeFlexibleTopAppBar(
-                title = { Text(stringResource(R.string.settings)) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.back)) } },
-                scrollBehavior = scroll,
-            )
-        },
-    ) { pad ->
-        LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 32.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            item { AboutCard() }
+        contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp,
+            top = padding.calculateTopPadding() + 8.dp,
+            bottom = padding.calculateBottomPadding() + 32.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        item { AboutCard() }
 
-            item {
-                Section(stringResource(R.string.as_updates)) {
-                    Toggle(
-                        stringResource(R.string.as_auto_updates),
-                        stringResource(R.string.as_auto_updates_sub),
-                        autoUpdates
-                    ) {
-                        autoUpdates = it
-                        AppPrefs.setAutoCheckUpdates(ctx, it)
-                    }
-                    Row_(
-                        Icons.Rounded.SystemUpdate,
-                        stringResource(R.string.as_check_updates),
-                        stringResource(R.string.as_check_updates_sub, BuildConfig.VERSION_NAME)
-                    ) {
-                        checkForUpdates()
-                    }
+        item {
+            Section(stringResource(R.string.as_updates)) {
+                Toggle(
+                    stringResource(R.string.as_auto_updates),
+                    stringResource(R.string.as_auto_updates_sub),
+                    autoUpdates
+                ) {
+                    autoUpdates = it
+                    AppPrefs.setAutoCheckUpdates(ctx, it)
+                }
+                Row_(
+                    Icons.Rounded.SystemUpdate,
+                    stringResource(R.string.as_check_updates),
+                    stringResource(R.string.as_check_updates_sub, BuildConfig.VERSION_NAME)
+                ) {
+                    checkForUpdates()
                 }
             }
+        }
 
-            item {
-                Section(stringResource(R.string.as_appearance)) {
-                    Row_(Icons.Rounded.Translate, stringResource(R.string.as_language), langName) { langDialog = true }
-                    Text(stringResource(R.string.as_theme), style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp))
-                    val options = listOf(R.string.as_theme_system, R.string.as_theme_light, R.string.as_theme_dark)
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                        options.forEachIndexed { i, res ->
-                            ToggleButton(
-                                checked = theme == i,
-                                onCheckedChange = { if (theme != i) { theme = i; AppPrefs.setTheme(ctx, i) } },
-                                shapes = when (i) {
-                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                    options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                                },
-                                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                                contentPadding = PaddingValues(horizontal = 8.dp),
-                            ) {
-                                // одна строка: длинные названия («Системная») не переносятся по буквам
-                                Text(stringResource(res), maxLines = 1, softWrap = false,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
-                            }
-                        }
-                    }
-                    if (Build.VERSION.SDK_INT >= 31) {
-                        Toggle(stringResource(R.string.as_dynamic), stringResource(R.string.as_dynamic_sub), dynamic) {
-                            dynamic = it; AppPrefs.setDynamicColor(ctx, it)
+        item {
+            Section(stringResource(R.string.as_appearance)) {
+                Row_(Icons.Rounded.Translate, stringResource(R.string.as_language), langName) { langDialog = true }
+                Text(stringResource(R.string.as_theme), style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp))
+                val options = listOf(R.string.as_theme_system, R.string.as_theme_light, R.string.as_theme_dark)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ConnectedButtonSpace)) {
+                    options.forEachIndexed { i, res ->
+                        ConnectedToggleButton(
+                            checked = theme == i,
+                            onCheckedChange = { if (theme != i) { theme = i; AppPrefs.setTheme(ctx, i) } },
+                            shape = connectedButtonShapes(i, options.lastIndex),
+                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                        ) {
+                            Text(stringResource(res), maxLines = 1, softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
                         }
                     }
                 }
-            }
-
-            item {
-                Section(stringResource(R.string.as_defaults), stringResource(R.string.as_defaults_sub)) {
-                    fun set(s: app.aemu.core.VmSettings) { defaults = s; AppPrefs.setDefaults(ctx, s) }
-                    Toggle(stringResource(R.string.vs_gpu), stringResource(R.string.vs_gpu_sub), defaults.gpu) { set(defaults.copy(gpu = it)) }
-                    Toggle(stringResource(R.string.vs_jit), stringResource(R.string.vs_jit_sub), defaults.jit) { set(defaults.copy(jit = it)) }
-                    Toggle(stringResource(R.string.vs_proxy), stringResource(R.string.vs_proxy_sub), defaults.netProxy) { set(defaults.copy(netProxy = it)) }
-                    Toggle(stringResource(R.string.vs_nav), stringResource(R.string.vs_nav_sub), defaults.showNavBar) { set(defaults.copy(showNavBar = it)) }
-                    Toggle(stringResource(R.string.vs_awake), stringResource(R.string.vs_awake_sub), defaults.keepScreenOn) { set(defaults.copy(keepScreenOn = it)) }
-                    Toggle(stringResource(R.string.as_led), stringResource(R.string.as_led_sub), defaults.showLed) { set(defaults.copy(showLed = it)) }
+                if (Build.VERSION.SDK_INT >= 31) {
+                    Toggle(stringResource(R.string.as_dynamic), stringResource(R.string.as_dynamic_sub), dynamic) {
+                        dynamic = it; AppPrefs.setDynamicColor(ctx, it)
+                    }
                 }
             }
+        }
 
-            item {
-                Section(stringResource(R.string.as_links)) {
-                    Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "aemulator.gt.tc") { open(Links.SITE) }
-                    Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "@aemulatorofficial") { open(Links.CHANNEL) }
-                    Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "uxazu") { open(Links.AUTHOR) }
-                    Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "t.me/istratii_tech1") { open(Links.ORIGINAL) }
-                    Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/uxazu/aemulator") { open(Links.GITHUB) }
-                }
+        item {
+            Section(stringResource(R.string.as_defaults), stringResource(R.string.as_defaults_sub)) {
+                fun set(s: app.andropaw.core.VmSettings) { defaults = s; AppPrefs.setDefaults(ctx, s) }
+                Toggle(stringResource(R.string.vs_gpu), stringResource(R.string.vs_gpu_sub), defaults.gpu) { set(defaults.copy(gpu = it)) }
+                Toggle(stringResource(R.string.vs_jit), stringResource(R.string.vs_jit_sub), defaults.jit) { set(defaults.copy(jit = it)) }
+                Toggle(stringResource(R.string.vs_proxy), stringResource(R.string.vs_proxy_sub), defaults.netProxy) { set(defaults.copy(netProxy = it)) }
+                Toggle(stringResource(R.string.vs_nav), stringResource(R.string.vs_nav_sub), defaults.showNavBar) { set(defaults.copy(showNavBar = it)) }
+                Toggle(stringResource(R.string.vs_awake), stringResource(R.string.vs_awake_sub), defaults.keepScreenOn) { set(defaults.copy(keepScreenOn = it)) }
+                Toggle(stringResource(R.string.as_led), stringResource(R.string.as_led_sub), defaults.showLed) { set(defaults.copy(showLed = it)) }
             }
+        }
 
-            item {
-                Section(stringResource(R.string.as_support)) {
-                    Row_(Icons.Rounded.Favorite, stringResource(R.string.as_donate), "dalink.to/uxazu") { open(Links.DONATE) }
-                }
+        item {
+            Section(stringResource(R.string.as_links)) {
+                Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "andropaw.app") { open(Links.SITE) }
+                Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "@andropaw") { open(Links.CHANNEL) }
+                Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "uxazu") { open(Links.AUTHOR) }
+                Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "t.me/istratii_tech1") { open(Links.ORIGINAL) }
+                Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/uxazu/andropaw") { open(Links.GITHUB) }
+            }
+        }
+
+        item {
+            Section(stringResource(R.string.as_support)) {
+                Row_(Icons.Rounded.Favorite, stringResource(R.string.as_donate), "dalink.to/uxazu") { open(Links.DONATE) }
             }
         }
     }
@@ -314,7 +287,7 @@ private fun AboutCard() {
             Image(painterResource(R.drawable.logo), null, Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text("AEmulator", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("AndroPaw", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Text(stringResource(R.string.as_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onPrimaryContainer)
                 Spacer(Modifier.height(4.dp))

@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import java.io.File
 import java.io.InputStream
@@ -184,7 +184,7 @@ class AdbServer(private val vm: GuestVm) {
                 vm.onPower?.invoke(true, if (reason == "recovery") "recovery" else "")
             }
             service.startsWith("root:") -> s.out.write("adbd is already running as root\n".toByteArray())
-            service.startsWith("unroot:") -> s.out.write("adbd cannot run as non-root in AEmulator\n".toByteArray())
+            service.startsWith("unroot:") -> s.out.write("adbd cannot run as non-root in AndroPaw\n".toByteArray())
             service.startsWith("remount:") -> s.out.write("remount succeeded\n".toByteArray())
             else -> vm.log("adb: unsupported service $service")
         }

@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "最新スマホで懐かしの Android ファームウェアを",
     "help": "対応ファイル",
     "add_firmware": "ファームウェアを追加",
+    "tab_emulator": "エミュレータ",
     "settings": "設定",
     "delete_title": "「%1$s」を削除しますか？",
     "delete_text": "システムとその中のすべてのデータが削除されます（%1$s）。共有メモリーカードのフォルダーは残ります。",
@@ -13,7 +14,7 @@ S = {
     "name": "名前",
     "save": "保存",
     "storage_title": "システム用の共有フォルダー",
-    "storage_text": "すべてのファイルへのアクセスを許可すると、各システムのメモリーカードが内部ストレージの AEmulator フォルダーに置かれ、APK や音楽、写真を入れやすくなります。",
+    "storage_text": "すべてのファイルへのアクセスを許可すると、各システムのメモリーカードが内部ストレージの AndroPaw フォルダーに置かれ、APK や音楽、写真を入れやすくなります。",
     "allow": "許可",
     "empty_title": "まだシステムがありません",
     "empty_text": "Android 2.3〜6.0 の ARM ファームウェアを追加してください：リカバリー用 ZIP、Odin アーカイブ（.tar.md5）、system.img、またはファクトリーイメージ。",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin（TON）",
     "as_copied": "アドレスをコピーしました",
     "as_version": "バージョン %1$s",
-    "as_about": "AEmulator は最新のスマホで懐かしの Android ファームウェアを動かします。無料でオープンソースです。",
+    "as_about": "AndroPaw は最新のスマホで懐かしの Android ファームウェアを動かします。無料でオープンソースです。",
 }

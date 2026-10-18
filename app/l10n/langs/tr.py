@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "Modern telefonda klasik Android yazılımları",
     "help": "Desteklenen dosyalar",
     "add_firmware": "Yazılım ekle",
+    "tab_emulator": "Emülatör",
     "settings": "Ayarlar",
     "delete_title": "“%1$s” silinsin mi?",
     "delete_text": "Sistem ve içindeki tüm veriler silinecek (%1$s). Ortak hafıza kartı klasörü kalır.",
@@ -13,7 +14,7 @@ S = {
     "name": "Ad",
     "save": "Kaydet",
     "storage_title": "Sistemler için ortak klasör",
-    "storage_text": "Tüm dosyalara erişime izin verin: her sistemin hafıza kartı dahili depolamadaki AEmulator klasöründe olur; APK, müzik ve fotoğraflar için kullanışlıdır.",
+    "storage_text": "Tüm dosyalara erişime izin verin: her sistemin hafıza kartı dahili depolamadaki AndroPaw klasöründe olur; APK, müzik ve fotoğraflar için kullanışlıdır.",
     "allow": "İzin ver",
     "empty_title": "Henüz sistem yok",
     "empty_text": "Android 2.3–6.0 için bir ARM yazılımı ekleyin: recovery ZIP, Odin arşivi (.tar.md5), system.img veya fabrika imajı.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin (TON)",
     "as_copied": "Adres kopyalandı",
     "as_version": "Sürüm %1$s",
-    "as_about": "AEmulator klasik Android yazılımlarını modern telefonlarda çalıştırır. Ücretsiz ve açık kaynak.",
+    "as_about": "AndroPaw klasik Android yazılımlarını modern telefonlarda çalıştırır. Ücretsiz ve açık kaynak.",
 }

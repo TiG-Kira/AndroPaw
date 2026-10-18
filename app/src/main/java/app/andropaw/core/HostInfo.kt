@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 /** Сведения о телефоне-хозяине, от которых зависят обходы в движке. */
 object HostInfo {

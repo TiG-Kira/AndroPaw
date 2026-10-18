@@ -1,7 +1,7 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.system.Os
-import app.aemu.importer.BootImage
+import app.andropaw.importer.BootImage
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -108,7 +108,7 @@ sysfs /sys sysfs rw,relatime 0 0
             if (!existing.contains("ro.sf.lcd_density")) sb.append("\nro.sf.lcd_density=$density\n")
             if (!existing.contains("ro.twrp.boot")) sb.append("ro.twrp.boot=1\n")
             if (!existing.contains("ro.boot.recovery")) sb.append("ro.boot.recovery=1\n")
-            if (!existing.contains("ro.product.model")) sb.append("ro.product.model=AEmulator Guest\n")
+            if (!existing.contains("ro.product.model")) sb.append("ro.product.model=AndroPaw Guest\n")
             defProp.writeText(sb.toString())
         }
 

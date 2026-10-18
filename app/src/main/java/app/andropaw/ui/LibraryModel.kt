@@ -1,14 +1,14 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import android.app.Application
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.aemu.core.GuestImage
-import app.aemu.core.ImageStore
-import app.aemu.core.VmSettings
-import app.aemu.importer.Importer
+import app.andropaw.core.GuestImage
+import app.andropaw.core.ImageStore
+import app.andropaw.core.VmSettings
+import app.andropaw.importer.Importer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,7 +59,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
             try {
                 // умолчания из настроек приложения поверх того, что подобрал анализатор (экран, частоты)
                 val raw = imp.import(uri, name)
-                val d = app.aemu.AppPrefs.defaults(ctx)
+                val d = app.andropaw.AppPrefs.defaults(ctx)
                 val img = raw.copy(settings = raw.settings.copy(gpu = d.gpu, jit = d.jit, netProxy = d.netProxy,
                     showNavBar = d.showNavBar, keepScreenOn = d.keepScreenOn, showLed = d.showLed))
                 if (img != raw) ImageStore.save(ctx, img)
@@ -73,7 +73,7 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun clone(src: GuestImage, name: String, copyData: Boolean, customSettings: app.aemu.core.VmSettings? = null) {
+    fun clone(src: GuestImage, name: String, copyData: Boolean, customSettings: app.andropaw.core.VmSettings? = null) {
         if (_import.value.active) return
         val ctx = getApplication<Application>()
         cloneCancelled = false

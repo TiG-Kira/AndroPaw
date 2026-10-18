@@ -1,9 +1,9 @@
-package app.aemu
+package app.andropaw
 
 import android.app.Application
-import app.aemu.core.Keeper
+import app.andropaw.core.Keeper
 
-class AemuApp : Application() {
+class AndroPawApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Keeper.ensureChannel(this)

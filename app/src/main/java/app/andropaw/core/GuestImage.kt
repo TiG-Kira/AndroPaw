@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import org.json.JSONArray
 import org.json.JSONObject

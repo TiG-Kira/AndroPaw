@@ -1,4 +1,4 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import android.text.format.Formatter
 import androidx.compose.animation.core.Spring
@@ -40,8 +40,10 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FloatingActionButtonMenu
-import androidx.compose.material3.FloatingActionButtonMenuItem
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,8 +54,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleFloatingActionButton
-import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
 import androidx.compose.material3.Button
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -74,8 +74,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.aemu.R
-import app.aemu.core.GuestImage
+import app.andropaw.R
+import app.andropaw.core.GuestImage
 
 /**
  * The vendor's look for a machine card: a "screen" gradient that tells TouchWiz, MIUI, Sense, Xperia… apart at a
@@ -172,22 +172,34 @@ fun MachineCard(
     }
 }
 
-/** "+": an M3 Expressive FAB menu — import a firmware file, or open the firmware library. */
+/**
+ * "+": a FAB menu — import a firmware file, or open the firmware library.
+ *
+ * AndroPaw: the original used the Material3 *Expressive* `FloatingActionButtonMenu` /
+ * `ToggleFloatingActionButton`, which only exist in Material3 1.4+. Miuix 0.9.4 requires the
+ * Material3 1.3.x baseline (same as Termux-Ultra), so the menu is rebuilt from the stable
+ * `FloatingActionButton` / `SmallFloatingActionButton` pair available in 1.3.0.
+ */
 @Composable
 fun HomeFab(expanded: Boolean, onToggle: (Boolean) -> Unit, onImport: () -> Unit, onLibrary: () -> Unit) {
-    FloatingActionButtonMenu(
-        expanded = expanded,
-        button = {
-            ToggleFloatingActionButton(checked = expanded, onCheckedChange = onToggle) {
-                val icon by remember { derivedStateOf { if (checkedProgress > 0.5f) Icons.Rounded.Close else Icons.Rounded.Add } }
-                Icon(rememberVectorPainter(icon), stringResource(R.string.add_firmware), Modifier.animateIcon({ checkedProgress }))
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        AnimatedVisibility(visible = expanded) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                SmallFloatingActionButton(
+                    onClick = { onToggle(false); onLibrary() },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) { Icon(Icons.Rounded.Inventory2, stringResource(R.string.lib_title)) }
+                Spacer(Modifier.height(12.dp))
+                SmallFloatingActionButton(
+                    onClick = { onToggle(false); onImport() },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) { Icon(Icons.Rounded.FileOpen, stringResource(R.string.add_import)) }
+                Spacer(Modifier.height(12.dp))
             }
-        },
-    ) {
-        FloatingActionButtonMenuItem(onClick = { onToggle(false); onImport() }, icon = { Icon(Icons.Rounded.FileOpen, null) },
-            text = { Text(stringResource(R.string.add_import)) })
-        FloatingActionButtonMenuItem(onClick = { onToggle(false); onLibrary() }, icon = { Icon(Icons.Rounded.Inventory2, null) },
-            text = { Text(stringResource(R.string.lib_title)) })
+        }
+        FloatingActionButton(onClick = { onToggle(!expanded) }) {
+            Icon(if (expanded) Icons.Rounded.Close else Icons.Rounded.Add, stringResource(R.string.add_firmware))
+        }
     }
 }
 
@@ -206,7 +218,7 @@ fun LibrarySheet(
 ) {
     var files by remember { mutableStateOf(emptyList<java.io.File>()) }
     DisposableEffect(Unit) {
-        val t = Thread { files = app.aemu.core.FirmwareFolder.list() }.apply { start() }
+        val t = Thread { files = app.andropaw.core.FirmwareFolder.list() }.apply { start() }
         onDispose { t.interrupt() }
     }
     ModalBottomSheet(

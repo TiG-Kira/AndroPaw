@@ -19,7 +19,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
-        android:name=".AemuApp"
+        android:name=".AndroPawApp"
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
@@ -29,7 +29,7 @@
         android:largeHeap="true"
         android:requestLegacyExternalStorage="true"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AEmulator"
+        android:theme="@style/Theme.AndroPaw"
         tools:targetApi="28">
 
         <activity
@@ -42,7 +42,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <intent-filter>
-                <action android:name="app.aemu.BOOT" />
+                <action android:name="app.andropaw.BOOT" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <intent-filter>
@@ -58,11 +58,6 @@
         </activity>
 
         <activity
-            android:name=".ui.AppSettingsActivity"
-            android:exported="false"
-            android:parentActivityName=".ui.MainActivity" />
-
-        <activity
             android:name=".ui.VmActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation"
             android:exported="false"
@@ -71,7 +66,7 @@
             android:resizeableActivity="true"
             android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.AEmulator.Vm" />
+            android:theme="@style/Theme.AndroPaw.Vm" />
 
         <service
             android:name=".core.Keeper"

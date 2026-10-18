@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "Firmware Android classici su un telefono moderno",
     "help": "File supportati",
     "add_firmware": "Aggiungi firmware",
+    "tab_emulator": "Emulatore",
     "settings": "Impostazioni",
     "delete_title": "Eliminare «%1$s»?",
     "delete_text": "Il sistema e tutti i suoi dati verranno eliminati (%1$s). La cartella condivisa della scheda di memoria resta.",
@@ -13,7 +14,7 @@ S = {
     "name": "Nome",
     "save": "Salva",
     "storage_title": "Cartella condivisa dei sistemi",
-    "storage_text": "Consenti l’accesso a tutti i file: la scheda di memoria di ogni sistema starà nella cartella AEmulator della memoria interna, comoda per APK, musica e foto.",
+    "storage_text": "Consenti l’accesso a tutti i file: la scheda di memoria di ogni sistema starà nella cartella AndroPaw della memoria interna, comoda per APK, musica e foto.",
     "allow": "Consenti",
     "empty_title": "Ancora nessun sistema",
     "empty_text": "Aggiungi un firmware ARM per Android 2.3–6.0: ZIP per recovery, archivio Odin (.tar.md5), system.img o immagine di fabbrica.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin (TON)",
     "as_copied": "Indirizzo copiato",
     "as_version": "Versione %1$s",
-    "as_about": "AEmulator esegue firmware Android classici sui telefoni moderni. Gratuito e open source.",
+    "as_about": "AndroPaw esegue firmware Android classici sui telefoni moderni. Gratuito e open source.",
 }

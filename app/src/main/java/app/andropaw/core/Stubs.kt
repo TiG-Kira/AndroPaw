@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.net.LocalSocket
 import java.io.ByteArrayOutputStream
@@ -328,7 +328,7 @@ class RilStub(
     companion object {
         private const val RIL_VERSION = 6
         private const val IFACE = "rmnet0"
-        private const val OPERATOR_NAME = "AEmulator"
+        private const val OPERATOR_NAME = "AndroPaw"
         private const val UNSOL_RADIO_STATE_CHANGED = 1000
         private const val UNSOL_RESPONSE_CALL_STATE_CHANGED = 1001
         private const val UNSOL_CALL_RING = 1018
@@ -372,7 +372,7 @@ class RilStub(
         private const val RIL_REQUEST_GET_SMSC_ADDRESS = 100
         private const val RIL_REQUEST_VOICE_RADIO_TECH = 108
         private const val IMEISV = "01"
-        private const val BASEBAND = "AEmulator"
+        private const val BASEBAND = "AndroPaw"
     }
 }
 

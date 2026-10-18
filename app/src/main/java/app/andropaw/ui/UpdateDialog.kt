@@ -1,4 +1,4 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -28,10 +28,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import app.aemu.R
-import app.aemu.update.AppUpdateManager
-import app.aemu.update.ReleaseInfo
-import app.aemu.update.UpdateState
+import app.andropaw.R
+import app.andropaw.update.AppUpdateManager
+import app.andropaw.update.ReleaseInfo
+import app.andropaw.update.UpdateState
 import java.io.File
 
 @Composable
@@ -279,7 +279,7 @@ fun UpdateDialog(
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { onOpenUrl("https://github.com/uxazu/AEmulator") }) {
+                    TextButton(onClick = { onOpenUrl("https://github.com/uxazu/AndroPaw") }) {
                         Text(stringResource(R.string.update_open_github))
                     }
                 }

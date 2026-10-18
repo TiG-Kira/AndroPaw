@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 /**
  * The native arm64 engine comes as one "kernel" per Android API level: its own runner and binder daemon (built from

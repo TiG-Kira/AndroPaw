@@ -1,4 +1,4 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -9,7 +9,7 @@ import android.graphics.Rect
 
 import android.view.MotionEvent
 import android.view.View
-import app.aemu.core.InputService
+import app.andropaw.core.InputService
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.MappedByteBuffer

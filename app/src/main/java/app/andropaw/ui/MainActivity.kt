@@ -1,4 +1,4 @@
-package app.aemu.ui
+package app.andropaw.ui
 
 import android.Manifest
 import android.content.Intent
@@ -58,16 +58,13 @@ import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.LinearWavyProgressIndicator
-import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -78,34 +75,40 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import app.aemu.BuildConfig
-import app.aemu.update.AppUpdateManager
-import app.aemu.update.ReleaseInfo
-import app.aemu.update.UpdateState
+import app.andropaw.BuildConfig
+import app.andropaw.update.AppUpdateManager
+import app.andropaw.update.ReleaseInfo
+import app.andropaw.update.UpdateState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.aemu.core.GuestImage
-import app.aemu.R
+import app.andropaw.core.GuestImage
+import app.andropaw.R
 import androidx.compose.ui.res.stringResource
 import androidx.compose.material.icons.rounded.Settings
 import android.content.Context
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.glass.GlassIconButton
+import top.yukonga.miuix.kmp.glass.GlassNavigationBar
+import top.yukonga.miuix.kmp.glass.GlassNavigationItem
+import top.yukonga.miuix.kmp.glass.GlassTopAppBar
 
-const val ACTION_BOOT = "app.aemu.BOOT"
+const val ACTION_BOOT = "app.andropaw.BOOT"
 
 class MainActivity : ComponentActivity() {
     private val model: LibraryModel by viewModels()
 
     /** Language this activity was created with: a change means its string resources are stale and need context recreation. */
     private var style = ""
-    private fun styleOf(c: Context) = app.aemu.AppPrefs.language(c)
+    private fun styleOf(c: Context) = app.andropaw.AppPrefs.language(c)
 
     override fun attachBaseContext(base: Context) {
         style = styleOf(base)
-        super.attachBaseContext(app.aemu.AppPrefs.wrap(base))
+        super.attachBaseContext(app.andropaw.AppPrefs.wrap(base))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,7 +116,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         askPermissions()
         handleView(intent)
-        setContent { AemuTheme { Library(model) } }
+        setContent { AndroPawTheme { Library(model, onRestyle = { recreate() }) } }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -142,7 +145,7 @@ class MainActivity : ComponentActivity() {
         if (importPath != null) {
             model.import(android.net.Uri.fromFile(java.io.File(importPath)))
         }
-        // ярлыки и автоматизация: am start -a app.aemu.BOOT --es id <образ>
+        // shortcuts and automation: am start -a app.andropaw.BOOT --es id <image>
         if (i?.action == ACTION_BOOT) i.getStringExtra("id")?.let { VmActivity.start(this, it, i.getBooleanExtra("recovery", false)) }
     }
 
@@ -155,8 +158,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The home screen: a glass shell over two pages — the emulator library and the settings.
+ *
+ * Both pages scroll under one [GlassTopAppBar] and share a single glass backdrop, captured by
+ * [rememberGlassPageBackdrop] and handed to the bar and the [GlassNavigationBar].
+ */
 @Composable
-fun Library(model: LibraryModel) {
+fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     val images by model.images.collectAsState()
     val imp by model.import.collectAsState()
     val ctx = LocalContext.current
@@ -169,17 +178,19 @@ fun Library(model: LibraryModel) {
     var addMenu by remember { mutableStateOf(false) }
     var library by remember { mutableStateOf(false) }
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
-    val scroll = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    /** 0 = emulator page, 1 = settings page. */
+    var tab by remember { mutableStateOf(0) }
+    val page = rememberGlassPageBackdrop()
 
     val scope = rememberCoroutineScope()
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
 
     LaunchedEffect(Unit) {
-        if (app.aemu.AppPrefs.autoCheckUpdates(ctx)) {
+        if (app.andropaw.AppPrefs.autoCheckUpdates(ctx)) {
             val now = System.currentTimeMillis()
-            if (now - app.aemu.AppPrefs.lastUpdateCheck(ctx) > 3600_000L) {
-                app.aemu.AppPrefs.setLastUpdateCheck(ctx, now)
+            if (now - app.andropaw.AppPrefs.lastUpdateCheck(ctx) > 3600_000L) {
+                app.andropaw.AppPrefs.setLastUpdateCheck(ctx, now)
                 val res = AppUpdateManager.checkLatestRelease()
                 res.getOrNull()?.let { rel ->
                     if (AppUpdateManager.isNewerVersion(rel.versionName, BuildConfig.VERSION_NAME)) {
@@ -201,57 +212,81 @@ fun Library(model: LibraryModel) {
                 AppUpdateManager.installApk(ctx, file)
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
-                    updateState = UpdateState.Error(e.localizedMessage ?: "Ошибка загрузки")
+                    updateState = UpdateState.Error(e.localizedMessage ?: "Download error")
                 }
             }
         }
     }
 
     Scaffold(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        modifier = Modifier.fillMaxSize(),
         topBar = {
-            LargeFlexibleTopAppBar(
-                title = { Text("AEmulator") },
-                subtitle = { Text(stringResource(R.string.lib_subtitle)) },
-                actions = { IconButton(onClick = { help = true }) { Icon(Icons.Rounded.Info, stringResource(R.string.help)) }
-                    IconButton(onClick = { ctx.startActivity(Intent(ctx, AppSettingsActivity::class.java)) }) { Icon(Icons.Rounded.Settings, stringResource(R.string.settings)) } },
-                scrollBehavior = scroll,
+            GlassTopAppBar(
+                title = if (tab == 0) stringResource(R.string.app_name) else stringResource(R.string.settings),
+                subtitle = if (tab == 0) stringResource(R.string.lib_subtitle) else "",
+                backdrop = page.backdrop,
+                actions = {
+                    if (tab == 0) {
+                        GlassIconButton(onClick = { help = true }) {
+                            MiuixIcon(Icons.Rounded.Info, stringResource(R.string.help), tint = MiuixTheme.colorScheme.onSurface)
+                        }
+                    }
+                },
+            )
+        },
+        bottomBar = {
+            GlassNavigationBar(
+                items = listOf(
+                    GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                    GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
+                ),
+                selectedIndex = tab,
+                onSelect = { tab = it },
+                backdrop = page.backdrop,
             )
         },
         floatingActionButton = {
-            HomeFab(expanded = addMenu, onToggle = { addMenu = it },
-                onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
+            if (tab == 0) {
+                HomeFab(expanded = addMenu, onToggle = { addMenu = it },
+                    onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
+            }
         },
     ) { pad ->
-        val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> androidx.compose.foundation.lazy.grid.GridItemSpan =
-            { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }
-        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-            columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(148.dp),
-            modifier = Modifier.fillMaxSize().padding(pad),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(span = full) { StorageAccessCard() }
-            item(span = full) {
-                AnimatedVisibility(imp.active || imp.error != null || imp.done != null) {
-                    ImportCard(imp, onCancel = model::cancelImport, onDismiss = model::dismissImport)
+        Box(Modifier.fillMaxSize().then(page.contentModifier).padding(pad)) {
+            if (tab == 0) {
+                val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> androidx.compose.foundation.lazy.grid.GridItemSpan =
+                    { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(148.dp),
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(span = full) { StorageAccessCard() }
+                    item(span = full) {
+                        AnimatedVisibility(imp.active || imp.error != null || imp.done != null) {
+                            ImportCard(imp, onCancel = model::cancelImport, onDismiss = model::dismissImport)
+                        }
+                    }
+                    if (images.isEmpty() && !imp.active) item(span = full) { EmptyState(onHelp = { help = true }) }
+                    items(images.size, key = { images[it].id }) { i ->
+                        val img = images[i]
+                        MachineCard(
+                            img,
+                            baseName = images.firstOrNull { it.id == img.baseId }?.name,
+                            modifier = Modifier.animateItem(),
+                            onStart = { VmActivity.start(ctx, img.id) },
+                            onSettings = { settingsFor = img },
+                            onRename = { renameFor = img },
+                            onNewMachine = { containerFrom = img },
+                            onReset = { resetFor = img },
+                            onDelete = { deleteFor = img },
+                        )
+                    }
                 }
-            }
-            if (images.isEmpty() && !imp.active) item(span = full) { EmptyState(onHelp = { help = true }) }
-            items(images.size, key = { images[it].id }) { i ->
-                val img = images[i]
-                MachineCard(
-                    img,
-                    baseName = images.firstOrNull { it.id == img.baseId }?.name,
-                    modifier = Modifier.animateItem(),
-                    onStart = { VmActivity.start(ctx, img.id) },
-                    onSettings = { settingsFor = img },
-                    onRename = { renameFor = img },
-                    onNewMachine = { containerFrom = img },
-                    onReset = { resetFor = img },
-                    onDelete = { deleteFor = img },
-                )
+            } else {
+                SettingsContent(onRestyle = onRestyle, padding = PaddingValues(0.dp))
             }
         }
     }
@@ -320,14 +355,14 @@ private fun ContainerDialog(
     src: GuestImage,
     images: List<GuestImage>,
     onDismiss: () -> Unit,
-    onCreate: (GuestImage, String, Boolean, app.aemu.core.VmSettings) -> Unit
+    onCreate: (GuestImage, String, Boolean, app.andropaw.core.VmSettings) -> Unit
 ) {
     var from by remember { mutableStateOf(src) }
     var name by remember(from) { mutableStateOf("${from.name} (${images.count { it.baseId == from.id || it.baseId == from.baseId.ifEmpty { "-" } } + 2})") }
     var copy by remember { mutableStateOf(false) }
     var preset by remember { mutableStateOf(1) } // 0: Perf, 1: Balanced, 2: Lite
     var settings by remember(from) { mutableStateOf(from.settings) }
-    val has32 = app.aemu.core.CpuInfo.hasAArch32
+    val has32 = app.andropaw.core.CpuInfo.hasAArch32
 
     fun applyPreset(p: Int) {
         preset = p
@@ -460,7 +495,7 @@ private fun ContainerDialog(
     )
 }
 
-/** Доступ ко всем файлам: общая папка гостя в «Внутренний накопитель/AEmulator». */
+/** All-files access: the guest's shared folder lives in «Internal storage/AndroPaw». */
 @Composable
 private fun StorageAccessCard() {
     if (Build.VERSION.SDK_INT < 30) return
@@ -516,7 +551,7 @@ private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Un
     ) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (s.active) LoadingIndicator(Modifier.size(40.dp)) else Icon(if (s.error != null) Icons.Rounded.Warning else Icons.Rounded.Android, null)
+                if (s.active) CircularProgressIndicator(Modifier.size(40.dp)) else Icon(if (s.error != null) Icons.Rounded.Warning else Icons.Rounded.Android, null)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(when { s.error != null -> stringResource(R.string.import_failed); s.active -> stringResource(R.string.import_running); else -> stringResource(R.string.import_done) },
@@ -528,8 +563,8 @@ private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Un
             when {
                 s.error != null -> Text(s.error, style = MaterialTheme.typography.bodyMedium)
                 s.active -> {
-                    if (s.progress in 0f..1f) LinearWavyProgressIndicator(progress = { s.progress }, modifier = Modifier.fillMaxWidth())
-                    else LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    if (s.progress in 0f..1f) LinearProgressIndicator(progress = s.progress, modifier = Modifier.fillMaxWidth())
+                    else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     Text(s.step, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }

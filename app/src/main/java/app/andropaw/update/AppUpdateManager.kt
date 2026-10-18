@@ -1,4 +1,4 @@
-package app.aemu.update
+package app.andropaw.update
 
 import android.content.Context
 import android.content.Intent
@@ -36,8 +36,8 @@ sealed interface UpdateState {
 }
 
 object AppUpdateManager {
-    private const val RELEASES_API = "https://api.github.com/repos/uxazu/AEmulator/releases"
-    private const val GITHUB_REPO_URL = "https://github.com/uxazu/AEmulator"
+    private const val RELEASES_API = "https://api.github.com/repos/uxazu/AndroPaw/releases"
+    private const val GITHUB_REPO_URL = "https://github.com/uxazu/AndroPaw"
 
     /**
      * Запрос к GitHub API для получения информации о последнем релизе с APK-файлом.
@@ -49,7 +49,7 @@ object AppUpdateManager {
             conn.connectTimeout = 15000
             conn.readTimeout = 15000
             conn.setRequestProperty("Accept", "application/vnd.github+json")
-            conn.setRequestProperty("User-Agent", "AEmulator-App")
+            conn.setRequestProperty("User-Agent", "AndroPaw-App")
 
             if (conn.responseCode != HttpURLConnection.HTTP_OK) {
                 throw Exception("HTTP ${conn.responseCode}: ${conn.responseMessage}")
@@ -144,7 +144,7 @@ object AppUpdateManager {
             conn.connectTimeout = 15000
             conn.readTimeout = 30000
             conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "AEmulator-App")
+            conn.setRequestProperty("User-Agent", "AndroPaw-App")
 
             val code = conn.responseCode
             if (code in listOf(HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, 307, 308)) {

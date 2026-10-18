@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import java.io.DataInputStream
 import java.io.File

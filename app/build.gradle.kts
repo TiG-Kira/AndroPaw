@@ -40,7 +40,7 @@ val packEngines = tasks.register("packEngines") {
 tasks.named("preBuild") { dependsOn(packEngines) }
 
 android {
-    namespace = "app.aemu"
+    namespace = "app.andropaw"
     compileSdk = 36
 
     defaultConfig {
@@ -57,16 +57,16 @@ android {
     productFlavors {
         create("standard") {
             dimension = "distribution"
-            applicationId = "app.aemu"
+            applicationId = "app.andropaw"
         }
         create("clone") {
             dimension = "distribution"
-            applicationId = "app.aemu.clone"
+            applicationId = "app.andropaw.clone"
         }
-        // a copy of this release that installs next to app.aemu (a package name part cannot start with a digit)
+        // a copy of this release that installs next to app.andropaw (a package name part cannot start with a digit)
         create("v0003") {
             dimension = "distribution"
-            applicationId = "app.aemu.v0003"
+            applicationId = "app.andropaw.v0003"
         }
     }
 
@@ -109,7 +109,6 @@ android {
     kotlin {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-            optIn.add("androidx.compose.material3.ExperimentalMaterial3ExpressiveApi")
             optIn.add("androidx.compose.material3.ExperimentalMaterial3Api")
         }
     }
@@ -118,16 +117,43 @@ android {
 }
 
 dependencies {
-    val bom = platform("androidx.compose:compose-bom:2025.11.00")
-    implementation(bom)
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3:1.5.0-alpha16")
-    implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.ui:ui-tooling-preview")
+
+    // Compose — pinned to the versions Miuix 0.9.4 targets (Compose 1.8.x / Material3 1.3.x).
+    // The previous compose-bom 2025.11.00 pulled Material3 1.5.0-alpha16; its expressive APIs are
+    // binary-incompatible with Miuix and rendered a blank screen, so we pin explicitly.
+    implementation("androidx.compose.ui:ui:1.8.3")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
+    implementation("androidx.compose.material3:material3:1.3.0")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
+
+    // MiuiX / HyperOS UI (Termux-Ultra look).
+    // NOTE: the artifacts are the Android-only variants (-android) published to GitHub Packages
+    // (https://maven.pkg.github.com/compose-miuix-ui/miuix), NOT the KMP artifacts on Maven Central.
+    // GitHub Packages requires a token with the `read:packages` scope.
+    // The glass layer (top.yukonga.miuix.kmp.glass) is vendored under app/src/main/java so it can be tuned.
+    implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.4")        // basic + theme + layout + anim + overlay
+    implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4")      // Backdrop / LayerBackdrop for glass
+    implementation("top.yukonga.miuix.kmp:miuix-shader-android:0.9.4")  // shader primitives the glass layer renders with
+    implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.4")     // Miuix icon set
+    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.4") // preference screens used by settings
+    // miuix-glass popup controls need NavigationBackHandler / rememberNavigationEventState (1.1.2+).
+    implementation("androidx.navigationevent:navigationevent-compose-android:1.1.2")
+    // Liquid-glass primitives (Android-only) used by the vendored glass module.
+    implementation("io.github.kyant0:backdrop-android:2.0.1") {
+        exclude(group = "org.jetbrains.compose")
+        exclude(group = "org.jetbrains.compose.ui")
+        exclude(group = "org.jetbrains.compose.foundation")
+    }
+    implementation("io.github.kyant0:shapes-android:1.2.1") {
+        exclude(group = "org.jetbrains.compose")
+        exclude(group = "org.jetbrains.compose.ui")
+        exclude(group = "org.jetbrains.compose.foundation")
+    }
+
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.tukaani:xz:1.10")
     implementation("org.apache.commons:commons-compress:1.28.0")
@@ -137,17 +163,17 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-// sh: ./gradlew :app:copyReleaseApks -> release-apks/<version>/app.aemu.apk and app.aemu.0003.apk
+// sh: ./gradlew :app:copyReleaseApks -> release-apks/<version>/app.andropaw.apk and app.andropaw.0003.apk
 tasks.register<Copy>("copyReleaseApks") {
     dependsOn("assembleStandardRelease", "assembleV0003Release")
     val v = android.defaultConfig.versionName
     from(layout.buildDirectory.dir("outputs/apk/standard/release")) {
         include("*.apk")
-        rename { "app.aemu.apk" }
+        rename { "app.andropaw.apk" }
     }
     from(layout.buildDirectory.dir("outputs/apk/v0003/release")) {
         include("*.apk")
-        rename { "app.aemu.0003.apk" }
+        rename { "app.andropaw.0003.apk" }
     }
     into(rootProject.layout.projectDirectory.dir("release-apks/$v"))
 }

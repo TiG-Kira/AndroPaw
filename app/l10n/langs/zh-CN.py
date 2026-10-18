@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "在现代手机上运行经典 Android 固件",
     "help": "支持的文件",
     "add_firmware": "添加固件",
+    "tab_emulator": "模拟器",
     "settings": "设置",
     "delete_title": "删除“%1$s”？",
     "delete_text": "将删除该系统及其中所有数据（%1$s）。共享存储卡文件夹会保留。",
@@ -13,7 +14,7 @@ S = {
     "name": "名称",
     "save": "保存",
     "storage_title": "系统共享文件夹",
-    "storage_text": "允许访问所有文件后，每个系统的存储卡都位于内部存储的 AEmulator 文件夹中，方便放入 APK、音乐和照片。",
+    "storage_text": "允许访问所有文件后，每个系统的存储卡都位于内部存储的 AndroPaw 文件夹中，方便放入 APK、音乐和照片。",
     "allow": "允许",
     "empty_title": "还没有系统",
     "empty_text": "添加适用于 Android 2.3–6.0 的 ARM 固件：Recovery 卡刷包、Odin 包（.tar.md5）、system.img 或官方出厂镜像。",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin（TON）",
     "as_copied": "地址已复制",
     "as_version": "版本 %1$s",
-    "as_about": "AEmulator 可在现代手机上运行经典 Android 固件。免费且开源。",
+    "as_about": "AndroPaw 可在现代手机上运行经典 Android 固件。免费且开源。",
 }

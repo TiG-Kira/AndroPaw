@@ -5,6 +5,7 @@ S = {
     "lib_subtitle": "Classic Android firmware on a modern phone",
     "help": "Supported files",
     "add_firmware": "Add firmware",
+    "tab_emulator": "Emulator",
     "settings": "Settings",
     "delete_title": "Delete “%1$s”?",
     "delete_text": "The system and all data inside it will be deleted (%1$s). The shared memory card folder stays.",
@@ -13,7 +14,7 @@ S = {
     "name": "Name",
     "save": "Save",
     "storage_title": "Shared folder for systems",
-    "storage_text": "Allow access to all files: then each system’s memory card lives in the AEmulator folder of internal storage — handy for APKs, music and photos.",
+    "storage_text": "Allow access to all files: then each system’s memory card lives in the AndroPaw folder of internal storage — handy for APKs, music and photos.",
     "allow": "Allow",
     "empty_title": "No systems yet",
     "empty_text": "Add an ARM firmware for Android 2.3–6.0: a recovery ZIP, an Odin archive (.tar.md5), system.img or a factory image.",
@@ -95,5 +96,5 @@ S = {
     "as_ton": "Toncoin (TON)",
     "as_copied": "Address copied",
     "as_version": "Version %1$s",
-    "as_about": "AEmulator runs classic Android firmware on modern phones. Free and open source.",
+    "as_about": "AndroPaw runs classic Android firmware on modern phones. Free and open source.",
 }

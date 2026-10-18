@@ -1,4 +1,4 @@
-package app.aemu.core
+package app.andropaw.core
 
 import android.system.Os
 import android.system.OsConstants
