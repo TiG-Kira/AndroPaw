@@ -1,0 +1,5 @@
+service vendor.aemu-omxstore /system/bin/aemu-omxstore
+    class main
+    user mediacodec
+    group camera drmrpc mediadrm
+    interface android.hardware.media.omx@1.0::IOmxStore default

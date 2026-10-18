@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a generic system image has no vendor feature list: without a USB feature there is no UsbManager, and Settings of 14 calls it unchecked -->
+<permissions>
+    <feature name="android.hardware.usb.host" />
+</permissions>

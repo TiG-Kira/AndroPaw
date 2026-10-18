@@ -1,0 +1,3 @@
+<!-- 17: the build check at boot wants a device matrix to be there ("No device matrix file"); it asks nothing of the framework -->
+<compatibility-matrix version="1.0" type="device">
+</compatibility-matrix>

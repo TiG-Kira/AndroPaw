@@ -1,0 +1,12 @@
+<!-- the firmware's own sound trigger HAL, hosted by /vendor/bin/hw/aemu-soundtrigger (ColorOS 14 on Qualcomm waits for it without end) -->
+<manifest version="1.0" type="device">
+    <hal format="hidl">
+        <name>android.hardware.soundtrigger</name>
+        <transport>hwbinder</transport>
+        <version>2.3</version>
+        <interface>
+            <name>ISoundTriggerHw</name>
+            <instance>default</instance>
+        </interface>
+    </hal>
+</manifest>

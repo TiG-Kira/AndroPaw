@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- no OMX codec: the software codecs come from Codec2 (see aemu-omxstore) -->
+<MediaCodecs>
+</MediaCodecs>

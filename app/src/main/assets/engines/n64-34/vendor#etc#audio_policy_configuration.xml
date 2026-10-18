@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Audio policy of the guest device: one module, the engine's audio HAL (the phone's speaker and microphone).
+     Android 10 has no built-in default: without this file the policy engine starts empty and audioserver stops. -->
+<audioPolicyConfiguration version="1.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <globalConfiguration speaker_drc_enabled="false"/>
+    <modules>
+        <xi:include href="primary_audio_policy_configuration.xml"/>
+    </modules>
+    <xi:include href="audio_policy_volumes.xml"/>
+    <xi:include href="default_volume_tables.xml"/>
+</audioPolicyConfiguration>

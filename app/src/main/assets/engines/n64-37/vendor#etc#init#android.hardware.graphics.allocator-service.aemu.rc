@@ -1,0 +1,6 @@
+service aemu-allocator /vendor/bin/hw/android.hardware.graphics.allocator-service.aemu
+    class hal animation
+    user system
+    group graphics drmrpc
+    capabilities SYS_NICE
+    onrestart restart surfaceflinger

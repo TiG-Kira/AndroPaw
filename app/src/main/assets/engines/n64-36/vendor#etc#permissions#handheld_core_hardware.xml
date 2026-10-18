@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What the guest device has, for a generic system image of Android 9+: there the list is the vendor side's to
+     give (up to 8.1 the system image carries handheld_core_hardware.xml itself). Without it the framework starts
+     no widget, backup, print or autofill service and the launcher stops on a null AppWidgetManager.
+     Only what the engine provides is listed: no compass, GPS, NFC, fingerprint. -->
+<permissions>
+    <feature name="android.software.cts" />
+    <feature name="android.hardware.audio.output" />
+    <feature name="android.hardware.camera" />
+    <feature name="android.hardware.camera.front" />
+    <feature name="android.hardware.location" />
+    <feature name="android.hardware.location.network" />
+    <feature name="android.hardware.sensor.accelerometer" />
+    <feature name="android.hardware.touchscreen" />
+    <feature name="android.hardware.touchscreen.multitouch" />
+    <feature name="android.hardware.touchscreen.multitouch.distinct" />
+    <feature name="android.hardware.touchscreen.multitouch.jazzhand" />
+    <feature name="android.hardware.faketouch" />
+    <feature name="android.hardware.microphone" />
+    <feature name="android.hardware.screen.portrait" />
+    <feature name="android.hardware.screen.landscape" />
+    <feature name="android.hardware.wifi" />
+    <feature name="android.software.app_widgets" />
+    <feature name="android.software.connectionservice" />
+    <feature name="android.software.voice_recognizers" />
+    <feature name="android.software.backup" />
+    <feature name="android.software.home_screen" />
+    <feature name="android.software.input_methods" />
+    <feature name="android.software.picture_in_picture" />
+    <feature name="android.software.activities_on_secondary_displays" />
+    <feature name="android.software.print" />
+    <feature name="android.software.companion_device_setup" />
+    <feature name="android.software.autofill" />
+    <feature name="android.software.device_admin" />
+    <feature name="android.software.managed_users" />
+    <feature name="android.software.midi" />
+</permissions>
