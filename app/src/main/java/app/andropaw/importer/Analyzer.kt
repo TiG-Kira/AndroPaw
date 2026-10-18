@@ -1,12 +1,12 @@
-package app.aemu.importer
+package app.andropaw.importer
 
 import android.content.Context
-import app.aemu.core.Engine
-import app.aemu.core.GuestImage
-import app.aemu.core.InitPlan
-import app.aemu.core.PropArea
-import app.aemu.core.VmPaths
-import app.aemu.core.VmSettings
+import app.andropaw.core.Engine
+import app.andropaw.core.GuestImage
+import app.andropaw.core.InitPlan
+import app.andropaw.core.PropArea
+import app.andropaw.core.VmPaths
+import app.andropaw.core.VmSettings
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -159,7 +159,7 @@ class Analyzer(private val ctx: Context, private val paths: VmPaths, private val
                 name = img.name, settings = img.settings, createdAt = img.createdAt, sizeBytes = img.sizeBytes,
                 lastBootMs = img.lastBootMs, bootCount = img.bootCount,
             )
-            app.aemu.core.ImageStore.save(ctx, out)
+            app.andropaw.core.ImageStore.save(ctx, out)
             return out
         }
     }

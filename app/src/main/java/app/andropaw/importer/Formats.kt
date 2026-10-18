@@ -1,4 +1,4 @@
-package app.aemu.importer
+package app.andropaw.importer
 
 import org.apache.commons.compress.compressors.lz4.BlockLZ4CompressorInputStream
 import java.io.ByteArrayInputStream

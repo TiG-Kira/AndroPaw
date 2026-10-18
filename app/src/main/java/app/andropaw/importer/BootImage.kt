@@ -1,4 +1,4 @@
-package app.aemu.importer
+package app.andropaw.importer
 
 import org.tukaani.xz.LZMAInputStream
 import org.tukaani.xz.XZInputStream

@@ -1,13 +1,13 @@
-package app.aemu.importer
+package app.andropaw.importer
 
 import android.content.Context
 import android.net.Uri
 import android.system.Os
-import app.aemu.core.GuestImage
-import app.aemu.core.ImageStore
-import app.aemu.core.TreeFixer
-import app.aemu.core.VmPaths
-import app.aemu.core.RecoveryImage
+import app.andropaw.core.GuestImage
+import app.andropaw.core.ImageStore
+import app.andropaw.core.TreeFixer
+import app.andropaw.core.VmPaths
+import app.andropaw.core.RecoveryImage
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
