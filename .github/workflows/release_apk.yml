@@ -109,11 +109,17 @@ jobs:
       - name: 解码 JKS 并生成 keystore.properties
         run: |
           set -uo pipefail
+          # 只打印长度/字节数，绝不打印内容：Secrets 一旦写进日志就等于公开私钥。
+          echo "诊断：JKS_BASE64 长度=${#JKS_BASE64:-} 别名=${ANDROPAW_KEY_ALIAS:-<空>} 类型=${ANDROPAW_STORE_TYPE:-<空,默认pkcs12>}"
           if [ -z "${JKS_BASE64:-}" ]; then
             echo "::warning::未配置 JKS_BASE64 —— 本次 Release 将产出**未签名** APK"
             exit 0
           fi
           echo "$JKS_BASE64" | base64 -d > app/andropaw-release.jks
+          if [ ! -s app/andropaw-release.jks ]; then
+            echo "::error::JKS_BASE64 解码后为空 —— 检查 Secret 是否为单行 base64"
+            exit 1
+          fi
           test -s app/andropaw-release.jks
           echo "JKS 写入完成：$(stat -c%s app/andropaw-release.jks) 字节"
           {
@@ -123,7 +129,8 @@ jobs:
             echo "keyAlias=${ANDROPAW_KEY_ALIAS}"
             echo "keyPassword=${ANDROPAW_KEY_PASSWORD}"
           } > keystore.properties
-          echo "keystore.properties 已生成"
+          echo "keystore.properties 已生成："
+          sed -E 's/(Password=).*/\1***/' keystore.properties
 
       # copyReleaseApks 依赖 assembleStandardRelease + assembleV0003Release，
       # 并把两个包重命名后落到 release-apks/<versionName>/。
@@ -171,8 +178,11 @@ jobs:
             | jq -r '.upload_url' | sed 's/{?name,label}//')
           echo "upload_base=$upload_base"
 
-          shopt -s nullglob
-          apks=(dist/*.apk)
+          # upload-artifact 保留 release-apks/<version>/ 这层目录，下载后是
+          # dist/<version>/*.apk —— 只 glob dist/*.apk 会一个都找不到。
+          mapfile -t apks < <(find dist -type f -name '*.apk' | sort)
+          echo "找到 ${#apks[@]} 个 APK："
+          printf '  %s\n' "${apks[@]}"
           if [ ${#apks[@]} -eq 0 ]; then
             echo "::error::dist/ 下没有任何 APK 产物，无法发布"
             exit 1
