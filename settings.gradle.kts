@@ -24,14 +24,15 @@ fun props(name: String): String? {
 fun gprUser(): String = props("gpr.user") ?: ""
 fun gprToken(): String = props("gpr.token") ?: ""
 
+// NOTE: Gradle compiles the `pluginManagement` block as a *separate* script, so top-level helpers
+// (gprUser/gprToken below) are NOT visible inside it — calling them there fails with
+// "Unresolved reference". Plugins only ever come from google()/gradlePluginPortal(), so the
+// GitHub Packages repo is declared in dependencyResolutionManagement only.
 pluginManagement {
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
-        // MiuiX 0.9.4 ships the Android-only artifacts (miuix-*-android) here, not on Maven Central.
-        // GitHub Packages requires a token with the `read:packages` scope even for public packages.
-        maven { url = uri("https://maven.pkg.github.com/compose-miuix-ui/miuix"); credentials { username = gprUser(); password = gprToken() } }
     }
 }
 dependencyResolutionManagement {
