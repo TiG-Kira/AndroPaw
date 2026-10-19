@@ -392,6 +392,14 @@ runs:
           echo ""
           # Manifest merger 的详细原因只落在 app/build/outputs/logs/ 里，不在 stdout，
           # 不下钻就只能看到一句 "Manifest merger failed with multiple errors, see logs"。
+          # 同时打到 stdout（raw log 里能直接看到）和 step summary。
+          for f in app/build/outputs/logs/manifest-merger-*.txt; do
+            if [ -f "$f" ]; then
+              echo "----- MANIFEST MERGER: $f -----"
+              tail -40 "$f"
+              echo "----- END MANIFEST MERGER -----"
+            fi
+          done
           for f in app/build/outputs/logs/manifest-merger-*.txt; do
             if [ -f "$f" ]; then
               echo "### Manifest merger: $(basename "$f")"
