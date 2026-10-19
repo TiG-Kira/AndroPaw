@@ -29,12 +29,8 @@ import androidx.compose.material.icons.rounded.Gamepad
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.ui.geometry.Offset
+
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
@@ -45,9 +41,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
@@ -96,19 +89,6 @@ import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.VolumeDown
 import androidx.compose.material.icons.rounded.VolumeUp
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -121,7 +101,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andropaw.core.Engine
 import app.andropaw.core.GuestLog
 import app.andropaw.core.GuestVm
@@ -129,6 +111,16 @@ import app.andropaw.core.ImageStore
 import app.andropaw.core.InputService
 import kotlinx.coroutines.delay
 import kotlin.concurrent.thread
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Slider
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Процесс :vm держит ровно одну машину. */
 object VmHost {
@@ -512,16 +504,14 @@ class VmActivity : ComponentActivity() {
     private fun SmsDialog(onDone: () -> Unit) {
         var from by remember { mutableStateOf("+10000000000") }
         var body by remember { mutableStateOf("Hello from AndroPaw") }
-        AlertDialog(onDismissRequest = onDone,
-            title = { Text(stringResource(R.string.m_sms)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(from, { from = it }, label = { Text(stringResource(R.string.m_sms_from)) }, singleLine = true)
-                    OutlinedTextField(body, { body = it }, label = { Text(stringResource(R.string.m_sms_body)) })
-                }
-            },
-            confirmButton = { Button(onClick = { sendSms(from, body); onDone() }) { Text(stringResource(R.string.m_send)) } },
-            dismissButton = { OutlinedButton(onClick = onDone) { Text(stringResource(R.string.close)) } })
+        MiuixDialog(show = true, title = stringResource(R.string.m_sms), onDismissRequest = onDone) {
+            TextField(from, { from = it }, label = stringResource(R.string.m_sms_from), singleLine = true)
+            TextField(body, { body = it }, label = stringResource(R.string.m_sms_body))
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.close), onClick = onDone),
+                DialogAction(stringResource(R.string.m_send), onClick = { sendSms(from, body); onDone() }, primary = true),
+            ))
+        }
     }
 
     @Composable
@@ -536,64 +526,58 @@ class VmActivity : ComponentActivity() {
                 runOnUiThread { airplane = v.getOrNull(0) == "1"; awake = (v.getOrNull(1)?.toIntOrNull() ?: 0) != 0 }
             }
         }
-        AlertDialog(onDismissRequest = onDone,
-            title = { Text(stringResource(R.string.m_device)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.m_airplane), Modifier.weight(1f))
-                        Switch(airplane, { v ->
-                            airplane = v
-                            guestAsync("settings put $ns airplane_mode_on ${if (v) 1 else 0}; " +
-                                "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state $v")
-                        })
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.m_stay_awake), Modifier.weight(1f))
-                        Switch(awake, { v ->
-                            awake = v
-                            guestAsync("settings put $ns stay_on_while_plugged_in ${if (v) 7 else 0}; svc power stayon ${if (v) "true" else "false"}")
-                        })
-                    }
-                }
-            },
-            confirmButton = { Button(onClick = onDone) { Text(stringResource(R.string.close)) } })
+        MiuixDialog(show = true, title = stringResource(R.string.m_device), onDismissRequest = onDone) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.m_airplane), Modifier.weight(1f))
+                Switch(airplane, { v ->
+                    airplane = v
+                    guestAsync("settings put $ns airplane_mode_on ${if (v) 1 else 0}; " +
+                        "am broadcast -a android.intent.action.AIRPLANE_MODE --ez state $v")
+                })
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.m_stay_awake), Modifier.weight(1f))
+                Switch(awake, { v ->
+                    awake = v
+                    guestAsync("settings put $ns stay_on_while_plugged_in ${if (v) 7 else 0}; svc power stayon ${if (v) "true" else "false"}")
+                })
+            }
+            DialogButtonRow(listOf(DialogAction(stringResource(R.string.close), onClick = onDone, primary = true)))
+        }
     }
 
     @Composable
     private fun AdbDialog(onDone: () -> Unit) {
         var on by remember { mutableStateOf(vm.adb.running) }
-        AlertDialog(onDismissRequest = onDone,
-            title = { Text(stringResource(R.string.m_adb)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.m_adb_enable), Modifier.weight(1f))
-                        Switch(on, { v -> if (v) vm.adb.start() else vm.adb.stop(); on = vm.adb.running })
-                    }
-                    if (on) {
-                        val ips = app.andropaw.core.AdbServer.addresses()
-                        for (ip in ips.ifEmpty { listOf("127.0.0.1") })
-                            Text("adb connect $ip:${vm.adb.port}", style = MaterialTheme.typography.bodyLarge,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                    }
-                    Text(stringResource(R.string.m_adb_hint), style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = { Button(onClick = onDone) { Text(stringResource(R.string.close)) } })
+        MiuixDialog(show = true, title = stringResource(R.string.m_adb), onDismissRequest = onDone) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.m_adb_enable), Modifier.weight(1f))
+                Switch(on, { v -> if (v) vm.adb.start() else vm.adb.stop(); on = vm.adb.running })
+            }
+            if (on) {
+                val ips = app.andropaw.core.AdbServer.addresses()
+                for (ip in ips.ifEmpty { listOf("127.0.0.1") })
+                    Text("adb connect $ip:${vm.adb.port}", fontSize = 15.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
+            Text(stringResource(R.string.m_adb_hint), fontSize = 12.sp)
+            DialogButtonRow(listOf(DialogAction(stringResource(R.string.close), onClick = onDone, primary = true)))
+        }
     }
 
     @Composable
     private fun CallDialog(onDone: () -> Unit) {
         var from by remember { mutableStateOf("+10000000000") }
-        AlertDialog(onDismissRequest = onDone,
-            title = { Text(stringResource(R.string.m_call)) },
-            text = { OutlinedTextField(from, { from = it }, label = { Text(stringResource(R.string.m_sms_from)) }, singleLine = true) },
-            confirmButton = { Button(onClick = {
-                if (!vm.ril.ring(from.trim())) toast(getString(R.string.m_failed))
-                onDone()
-            }) { Text(stringResource(R.string.m_call_ring)) } },
-            dismissButton = { OutlinedButton(onClick = onDone) { Text(stringResource(R.string.close)) } })
+        MiuixDialog(show = true, title = stringResource(R.string.m_call), onDismissRequest = onDone) {
+            TextField(from, { from = it }, label = stringResource(R.string.m_sms_from), singleLine = true)
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.close), onClick = onDone),
+                DialogAction(stringResource(R.string.m_call_ring), onClick = {
+                    if (!vm.ril.ring(from.trim())) toast(getString(R.string.m_failed))
+                    onDone()
+                }, primary = true),
+            ))
+        }
     }
 
     @Composable
@@ -618,32 +602,30 @@ class VmActivity : ComponentActivity() {
                 }
             }
         }
-        AlertDialog(onDismissRequest = onDone,
-            title = { Text(stringResource(R.string.m_battery)) },
-            text = {
-                Column {
-                    Text("${level.toInt()}%")
-                    Slider(level, { level = it }, valueRange = 0f..100f)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.m_charging), Modifier.weight(1f)); Switch(charging, { charging = it })
-                    }
-                }
-            },
-            confirmButton = { Button(onClick = {
-                val lvl = level.toInt()
-                val ac = if (charging) 1 else 0
-                val cmd = "echo $lvl > /sys/class/power_supply/battery/capacity 2>/dev/null; " +
-                    "echo $ac > /sys/class/power_supply/ac/online 2>/dev/null; " +
-                    "dumpsys battery set level $lvl 2>/dev/null; " +
-                    "dumpsys battery set ac $ac 2>/dev/null; " +
-                    "dumpsys battery set usb 0 2>/dev/null"
-                guestAsync(cmd)
-                onDone()
-            }) { Text(stringResource(R.string.m_apply)) } },
-            dismissButton = { OutlinedButton(onClick = {
-                guestAsync("dumpsys battery reset 2>/dev/null")
-                onDone()
-            }) { Text(stringResource(R.string.m_reset)) } })
+        MiuixDialog(show = true, title = stringResource(R.string.m_battery), onDismissRequest = onDone) {
+            Text("${level.toInt()}%", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Slider(level, { level = it }, valueRange = 0f..100f)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.m_charging), Modifier.weight(1f)); Switch(charging, { charging = it })
+            }
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.m_reset), onClick = {
+                    guestAsync("dumpsys battery reset 2>/dev/null")
+                    onDone()
+                }),
+                DialogAction(stringResource(R.string.m_apply), onClick = {
+                    val lvl = level.toInt()
+                    val ac = if (charging) 1 else 0
+                    val cmd = "echo $lvl > /sys/class/power_supply/battery/capacity 2>/dev/null; " +
+                        "echo $ac > /sys/class/power_supply/ac/online 2>/dev/null; " +
+                        "dumpsys battery set level $lvl 2>/dev/null; " +
+                        "dumpsys battery set ac $ac 2>/dev/null; " +
+                        "dumpsys battery set usb 0 2>/dev/null"
+                    guestAsync(cmd)
+                    onDone()
+                }, primary = true),
+            ))
+        }
     }
 
     private fun rebootVm(recovery: Boolean = false) {
@@ -671,7 +653,6 @@ class VmActivity : ComponentActivity() {
     private fun Overlay() {
         var showLog by remember { mutableStateOf(false) }
         var showTerm by remember { mutableStateOf(false) }
-        var menu by remember { mutableStateOf(false) }
         var dialog by remember { mutableStateOf(Dlg.NONE) }
         // recovery is "running" too, but has no Android behind am/pm/settings
         val running = state == GuestVm.State.RUNNING && !vm.recoveryMode
@@ -697,12 +678,12 @@ class VmActivity : ComponentActivity() {
             ) { BootCard(seconds) }
 
             if (drawing && state == GuestVm.State.BOOTING && !showLog && vm.screenUpAt == 0L) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
-                    modifier = Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)) {
+                Box(Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)
+                    .clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f))) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(24.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.vm_booting_short, seconds.toInt()), style = MaterialTheme.typography.labelMedium)
+                        Text(stringResource(R.string.vm_booting_short, seconds.toInt()), fontSize = 12.sp)
                     }
                 }
             }
@@ -721,73 +702,61 @@ class VmActivity : ComponentActivity() {
                 .pointerInput(Unit) {
                     detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset = clamp(menuOffset + d) }
                 }) {
-                FilledTonalIconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.menu))
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text(stringResource(R.string.log)) }, leadingIcon = { Icon(Icons.Rounded.Terminal, null) },
-                        onClick = { menu = false; showLog = true })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_terminal)) }, leadingIcon = { Icon(Icons.Rounded.Code, null) },
-                        enabled = running, onClick = { menu = false; showTerm = true })
-                    // the machine keeps running behind its notification
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_minimize)) }, leadingIcon = { Icon(Icons.Rounded.Close, null) },
-                        onClick = { menu = false; moveTaskToBack(true) })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(stringResource(R.string.vol_up)) }, leadingIcon = { Icon(Icons.Rounded.VolumeUp, null) },
-                        onClick = { vm.input.press(InputService.KEY_VOLUMEUP) })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.vol_down)) }, leadingIcon = { Icon(Icons.Rounded.VolumeDown, null) },
-                        onClick = { vm.input.press(InputService.KEY_VOLUMEDOWN) })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.power)) }, leadingIcon = { Icon(Icons.Rounded.PowerSettingsNew, null) },
-                        onClick = { menu = false; vm.input.press(InputService.KEY_POWER) })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_power_menu)) }, leadingIcon = { Icon(Icons.Rounded.PowerSettingsNew, null) },
-                        onClick = { menu = false; vm.input.press(InputService.KEY_POWER, 1500) })
-                    // long-press Menu makes 2.x–4.x call InputMethodManager.toggleSoftInput: the firmware's own keyboard
-                    if (!vm.recoveryMode) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_keyboard)) }, leadingIcon = { Icon(Icons.Rounded.Keyboard, null) },
-                            enabled = running, onClick = {
-                                menu = false
+                GlassMenuButton(
+                    icon = Icons.Rounded.MoreVert,
+                    contentDescription = stringResource(R.string.menu),
+                    modifier = Modifier.size(40.dp),
+                    items = buildList {
+                        add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
+                        add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
+                        // the machine keeps running behind its notification
+                        add(GlassMenuItem(stringResource(R.string.m_minimize), Icons.Rounded.Close) { moveTaskToBack(true) })
+                        add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { vm.input.press(InputService.KEY_VOLUMEUP) })
+                        add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { vm.input.press(InputService.KEY_VOLUMEDOWN) })
+                        add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER) })
+                        add(GlassMenuItem(stringResource(R.string.m_power_menu), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER, 1500) })
+                        // long-press Menu makes 2.x–4.x call InputMethodManager.toggleSoftInput: the firmware's own keyboard
+                        if (!vm.recoveryMode) {
+                            add(GlassMenuItem(stringResource(R.string.m_keyboard), Icons.Rounded.Keyboard, enabled = running) {
                                 // 5.0+ hides the soft keyboard while it sees hardware keys and has no long-Menu toggle
                                 if (vm.img.api >= 21) guestAsync("settings put secure show_ime_with_hard_keyboard 1")
                                 else vm.input.press(InputService.KEY_MENU, 1000)
                             })
-                        HorizontalDivider()
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_paste)) }, leadingIcon = { Icon(Icons.Rounded.ContentPaste, null) },
-                            enabled = running, onClick = { menu = false; pasteToGuest() })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_sms)) }, leadingIcon = { Icon(Icons.Rounded.Sms, null) },
-                            enabled = running, onClick = { menu = false; dialog = Dlg.SMS })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_call)) }, leadingIcon = { Icon(Icons.Rounded.Call, null) },
-                            enabled = running, onClick = { menu = false; dialog = Dlg.CALL })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_battery)) }, leadingIcon = { Icon(Icons.Rounded.BatteryStd, null) },
-                            enabled = running, onClick = { menu = false; dialog = Dlg.BATTERY })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_install_apk)) }, leadingIcon = { Icon(Icons.Rounded.InstallMobile, null) },
-                            enabled = running, onClick = { menu = false; pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*")) })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_device)) }, leadingIcon = { Icon(Icons.Rounded.Tune, null) },
-                            enabled = running, onClick = { menu = false; dialog = Dlg.DEVICE })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_adb)) }, leadingIcon = { Icon(Icons.Rounded.Lan, null) },
-                            enabled = running, onClick = { menu = false; dialog = Dlg.ADB })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.m_settings)) }, leadingIcon = { Icon(Icons.Rounded.Settings, null) },
-                            enabled = running, onClick = { menu = false; guestAsync("am start -a android.settings.SETTINGS") })
-                    }
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_screenshot)) }, leadingIcon = { Icon(Icons.Rounded.Screenshot, null) },
-                        enabled = state == GuestVm.State.RUNNING, onClick = { menu = false; screenshot() })
-                    DropdownMenuItem(text = { Text(stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record)) },
-                        leadingIcon = { Icon(Icons.Rounded.Videocam, null) },
-                        enabled = state == GuestVm.State.RUNNING || recOn.value, onClick = { menu = false; toggleRecording() })
-                    DropdownMenuItem(text = { Text(stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc)) },
-                        leadingIcon = { Icon(Icons.Rounded.Cast, null) },
-                        onClick = { menu = false; toggleVnc() })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_reset_menu_pos)) }, leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
-                        onClick = { menu = false; menuOffset = Offset.Zero; saveMenuOffset() })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(stringResource(R.string.m_reboot)) }, leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
-                        onClick = { menu = false; rebootVm() })
-                    DropdownMenuItem(text = { Text(stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery)) },
-                        leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
-                        enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
-                        onClick = { menu = false; rebootVm(!vm.recoveryMode) })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.shutdown)) }, leadingIcon = { Icon(Icons.Rounded.Close, null) },
-                        onClick = { menu = false; stopVm() })
-                }
+                            add(GlassMenuItem(stringResource(R.string.m_paste), Icons.Rounded.ContentPaste, enabled = running) { pasteToGuest() })
+                            add(GlassMenuItem(stringResource(R.string.m_sms), Icons.Rounded.Sms, enabled = running) { dialog = Dlg.SMS })
+                            add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
+                            add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
+                            add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
+                                pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
+                            })
+                            add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
+                            add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })
+                            add(GlassMenuItem(stringResource(R.string.m_settings), Icons.Rounded.Settings, enabled = running) {
+                                guestAsync("am start -a android.settings.SETTINGS")
+                            })
+                        }
+                        add(GlassMenuItem(stringResource(R.string.m_screenshot), Icons.Rounded.Screenshot, enabled = state == GuestVm.State.RUNNING) { screenshot() })
+                        add(GlassMenuItem(
+                            stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record),
+                            Icons.Rounded.Videocam,
+                            enabled = state == GuestVm.State.RUNNING || recOn.value,
+                        ) { toggleRecording() })
+                        add(GlassMenuItem(
+                            stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc),
+                            Icons.Rounded.Cast,
+                        ) { toggleVnc() })
+                        add(GlassMenuItem(stringResource(R.string.m_reset_menu_pos), Icons.Rounded.RestartAlt) {
+                            menuOffset = Offset.Zero; saveMenuOffset()
+                        })
+                        add(GlassMenuItem(stringResource(R.string.m_reboot), Icons.Rounded.RestartAlt) { rebootVm() })
+                        add(GlassMenuItem(
+                            stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
+                            Icons.Rounded.RestartAlt,
+                            enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
+                        ) { rebootVm(!vm.recoveryMode) })
+                        add(GlassMenuItem(stringResource(R.string.shutdown), Icons.Rounded.Close) { stopVm() })
+                    },
+                )
             }
 
             when (dialog) {
@@ -812,7 +781,7 @@ class VmActivity : ComponentActivity() {
         val compact = vm.settings.navSize == 0
         val keys = remember { vm.settings.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL } }
         if (keys.isEmpty()) return
-        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f), modifier = modifier) {
+        Box(modifier.clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))) {
             Row(Modifier.padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 2.dp else 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp)) {
                 for (k in keys) NavKey(k, if (compact) 36.dp else 48.dp)
@@ -824,7 +793,7 @@ class VmActivity : ComponentActivity() {
     private fun NavKey(k: String, size: androidx.compose.ui.unit.Dp) {
         var pressed by remember { mutableStateOf(false) }
         val bg by androidx.compose.animation.animateColorAsState(
-            if (pressed) MaterialTheme.colorScheme.primary.copy(alpha = 0.28f) else Color.Transparent, label = "key")
+            if (pressed) MiuixTheme.colorScheme.primary.copy(alpha = 0.28f) else Color.Transparent, label = "key")
         val code = when (k) {
             "back" -> InputService.KEY_BACK; "home" -> InputService.KEY_HOME; "menu" -> InputService.KEY_MENU
             "search" -> InputService.KEY_SEARCH; "volup" -> InputService.KEY_VOLUMEUP; "voldown" -> InputService.KEY_VOLUMEDOWN
@@ -931,25 +900,23 @@ class VmActivity : ComponentActivity() {
     private fun BootCard(seconds: Long) {
         Card(
             modifier = Modifier.widthIn(max = 360.dp).padding(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
-                contentColor = MaterialTheme.colorScheme.onSurface),
-            shape = MaterialTheme.shapes.extraLarge,
+            insideMargin = androidx.compose.foundation.layout.PaddingValues(24.dp),
         ) {
-            Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.padding(0.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (state == GuestVm.State.FAILED) {
-                    Text(stringResource(R.string.failed_start), style = MaterialTheme.typography.headlineSmall)
+                    Text(stringResource(R.string.failed_start), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    Text(vm.failure ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                    Text(vm.failure ?: "", fontSize = 14.sp, color = MiuixTheme.colorScheme.error)
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { stopVm() }) { Text(stringResource(R.string.close)) }
+                        TextButton(text = stringResource(R.string.close), onClick = { stopVm() })
                         Button(onClick = { thread { vm.stop(); vm.boot() } }) { Text(stringResource(R.string.retry)) }
                     }
                 } else {
                     CircularProgressIndicator(Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
-                    Text(vm.img.name, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(vm.img.displayVersion, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(vm.img.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(vm.img.displayVersion, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Spacer(Modifier.height(12.dp))
                     val phase = when (state) {
                         GuestVm.State.PREPARING -> stringResource(R.string.st_preparing)
@@ -957,15 +924,15 @@ class VmActivity : ComponentActivity() {
                         GuestVm.State.STOPPING -> stringResource(R.string.st_stopping)
                         else -> "…"
                     }
-                    Text(phase, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    Text(phase, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.primary)
                     if (vm.img.bootCount == 0 && state == GuestVm.State.BOOTING) {
                         Spacer(Modifier.height(6.dp))
                         Text(stringResource(R.string.first_boot_hint),
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(logLines.lastOrNull()?.substringAfter(' ') ?: "", style = Mono, maxLines = 2,
-                        overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        overflow = TextOverflow.Ellipsis, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
             }
         }
@@ -983,25 +950,31 @@ class VmActivity : ComponentActivity() {
             }
         }
         val list = if (guestTab) guestLines else logLines
-        Surface(Modifier.fillMaxSize(), color = Color(0xF0101410), contentColor = Color(0xFFE2E3DD)) {
+        Box(Modifier.fillMaxSize().background(Color(0xF0101410))) {
             Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.log), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f),
+                    Text(stringResource(R.string.log), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    IconButton(onClick = { copyLog(list.toList()) }) { Icon(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) }
-                    IconButton(onClick = { pendingExport = list.toList(); exportLog.launch("aemu-${vm.img.id}-${if (guestTab) "logcat" else "host"}.log") }) {
-                        Icon(Icons.Rounded.Download, stringResource(R.string.log_export))
+                    PanelIconButton(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) { copyLog(list.toList()) }
+                    PanelIconButton(Icons.Rounded.Download, stringResource(R.string.log_export)) {
+                        pendingExport = list.toList(); exportLog.launch("aemu-${vm.img.id}-${if (guestTab) "logcat" else "host"}.log")
                     }
-                    FilledTonalIconButton(onClick = onClose) { Icon(Icons.Rounded.Close, stringResource(R.string.close)) }
+                    PanelIconButton(Icons.Rounded.Close, stringResource(R.string.close), filled = true) { onClose() }
                 }
                 Spacer(Modifier.height(8.dp))
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    SegmentedButton(selected = !guestTab, onClick = { guestTab = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) {
-                        Text(stringResource(R.string.host), maxLines = 1)
-                    }
-                    SegmentedButton(selected = guestTab, onClick = { guestTab = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) {
-                        Text(stringResource(R.string.guest_log), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConnectedButtonSpace)) {
+                    ConnectedToggleButton(
+                        checked = !guestTab,
+                        onCheckedChange = { guestTab = false },
+                        shape = connectedButtonShapes(0, 1),
+                        modifier = Modifier.weight(1f),
+                    ) { checked -> TabLabel(stringResource(R.string.host), checked) }
+                    ConnectedToggleButton(
+                        checked = guestTab,
+                        onCheckedChange = { guestTab = true },
+                        shape = connectedButtonShapes(1, 1),
+                        modifier = Modifier.weight(1f),
+                    ) { checked -> TabLabel(stringResource(R.string.guest_log), checked) }
                 }
                 Spacer(Modifier.height(8.dp))
                 val st = rememberLazyListState()
@@ -1041,14 +1014,14 @@ class VmActivity : ComponentActivity() {
                 }
             }
         }
-        Surface(Modifier.fillMaxSize(), color = Color(0xF0101410), contentColor = Color(0xFFE2E3DD)) {
+        Box(Modifier.fillMaxSize().background(Color(0xF0101410))) {
             Column(Modifier.statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(R.string.m_terminal), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f),
+                    Text(stringResource(R.string.m_terminal), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (busy) CircularProgressIndicator(Modifier.size(32.dp))
-                    IconButton(onClick = { copyLog(termLines.toList()) }) { Icon(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) }
-                    FilledTonalIconButton(onClick = onClose) { Icon(Icons.Rounded.Close, stringResource(R.string.close)) }
+                    PanelIconButton(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) { copyLog(termLines.toList()) }
+                    PanelIconButton(Icons.Rounded.Close, stringResource(R.string.close), filled = true) { onClose() }
                 }
                 Spacer(Modifier.height(8.dp))
                 val st = rememberLazyListState()
@@ -1060,24 +1033,57 @@ class VmActivity : ComponentActivity() {
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = {
+                    PanelIconButton(Icons.Rounded.History, null) {
                         if (termHistory.isNotEmpty()) {
                             histPos = if (histPos <= 0) termHistory.size - 1 else histPos - 1
                             cmd = termHistory[histPos]
                         }
-                    }) { Icon(Icons.Rounded.History, null) }
-                    OutlinedTextField(cmd, { cmd = it }, modifier = Modifier.weight(1f), singleLine = true,
-                        textStyle = Mono, placeholder = { Text("getprop ro.build.version.release", style = Mono) },
+                    }
+                    TextField(cmd, { cmd = it }, modifier = Modifier.weight(1f), singleLine = true, label = "",
+                        textStyle = Mono,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send,
                             autoCorrectEnabled = false, capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.None),
                         keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = { run() }))
                     Spacer(Modifier.width(8.dp))
-                    FilledTonalIconButton(onClick = { run() }, enabled = !busy && cmd.isNotBlank()) {
-                        Icon(Icons.AutoMirrored.Rounded.Send, stringResource(R.string.m_send))
-                    }
+                    PanelIconButton(Icons.AutoMirrored.Rounded.Send, stringResource(R.string.m_send), filled = true,
+                        enabled = !busy && cmd.isNotBlank()) { run() }
                 }
             }
         }
+    }
+
+    /** A small circular icon button for the log/terminal panels' toolbars. */
+    @Composable
+    private fun PanelIconButton(
+        icon: androidx.compose.ui.graphics.vector.ImageVector,
+        contentDescription: String?,
+        filled: Boolean = false,
+        enabled: Boolean = true,
+        onClick: () -> Unit,
+    ) {
+        Box(
+            Modifier
+                .padding(horizontal = 4.dp)
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(if (filled) MiuixTheme.colorScheme.secondaryContainer else Color.Transparent)
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription)
+        }
+    }
+
+    /** Tab caption for the log panel's connected toggle pair. */
+    @Composable
+    private fun TabLabel(label: String, checked: Boolean) {
+        Text(
+            label,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontSize = 13.sp,
+            color = if (checked) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface,
+        )
     }
 
     private var pendingExport: List<String> = emptyList()

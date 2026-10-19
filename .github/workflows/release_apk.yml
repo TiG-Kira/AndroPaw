@@ -110,7 +110,7 @@ jobs:
         run: |
           set -uo pipefail
           # 只打印长度/字节数，绝不打印内容：Secrets 一旦写进日志就等于公开私钥。
-          echo "诊断：JKS_BASE64 长度=${#JKS_BASE64:-} 别名=${ANDROPAW_KEY_ALIAS:-<空>} 类型=${ANDROPAW_STORE_TYPE:-<空,默认pkcs12>}"
+          echo "诊断：JKS_BASE64 长度=${#JKS_BASE64} 别名=${ANDROPAW_KEY_ALIAS:-<空>} 类型=${ANDROPAW_STORE_TYPE:-<空,默认pkcs12>}"
           if [ -z "${JKS_BASE64:-}" ]; then
             echo "::warning::未配置 JKS_BASE64 —— 本次 Release 将产出**未签名** APK"
             exit 0

@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,9 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Language
@@ -34,45 +31,41 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import app.andropaw.update.AppUpdateManager
-import app.andropaw.update.ReleaseInfo
-import app.andropaw.update.UpdateState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andropaw.AppPrefs
 import app.andropaw.BuildConfig
 import app.andropaw.R
+import app.andropaw.update.AppUpdateManager
+import app.andropaw.update.ReleaseInfo
+import app.andropaw.update.UpdateState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.RadioButton
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** Project links — kept in sync across the app, README and the website. */
 object Links {
@@ -96,7 +89,6 @@ fun SettingsContent(
     padding: PaddingValues,
 ) {
     val ctx = LocalContext.current
-    val scroll = androidx.compose.material3.TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var langDialog by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
@@ -155,7 +147,6 @@ fun SettingsContent(
     val langName = AppPrefs.LANGUAGES.firstOrNull { it.first == langTag }?.second?.ifEmpty { null } ?: stringResource(R.string.as_lang_system)
 
     LazyColumn(
-        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
         contentPadding = PaddingValues(
             start = 16.dp, end = 16.dp,
             top = padding.calculateTopPadding() + 8.dp,
@@ -188,7 +179,7 @@ fun SettingsContent(
         item {
             Section(stringResource(R.string.as_appearance)) {
                 Row_(Icons.Rounded.Translate, stringResource(R.string.as_language), langName) { langDialog = true }
-                Text(stringResource(R.string.as_theme), style = MaterialTheme.typography.labelLarge,
+                Text(stringResource(R.string.as_theme), fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp))
                 val options = listOf(R.string.as_theme_system, R.string.as_theme_light, R.string.as_theme_dark)
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(ConnectedButtonSpace)) {
@@ -199,9 +190,10 @@ fun SettingsContent(
                             shape = connectedButtonShapes(i, options.lastIndex),
                             modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
                             contentPadding = PaddingValues(horizontal = 8.dp),
-                        ) {
+                        ) { checked ->
                             Text(stringResource(res), maxLines = 1, softWrap = false,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 13.sp,
+                                color = if (checked) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface)
                         }
                     }
                 }
@@ -243,28 +235,29 @@ fun SettingsContent(
     }
 
     if (langDialog) {
-        AlertDialog(
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.as_language),
             onDismissRequest = { langDialog = false },
-            icon = { Icon(Icons.Rounded.Language, null) },
-            title = { Text(stringResource(R.string.as_language)) },
-            text = {
-                LazyColumn {
-                    items(AppPrefs.LANGUAGES) { (tag, name) ->
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable {
-                                langDialog = false
-                                if (tag != langTag) { AppPrefs.setLanguage(ctx, tag); onRestyle() }
-                            }.padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = tag == langTag, onClick = null, modifier = Modifier.padding(horizontal = 12.dp))
-                            Text(name.ifEmpty { stringResource(R.string.as_lang_system) }, style = MaterialTheme.typography.bodyLarge)
-                        }
-                    }
+        ) {
+            LazyColumn {
+                items(AppPrefs.LANGUAGES) { (tag, name) ->
+                    BasicComponent(
+                        title = name.ifEmpty { stringResource(R.string.as_lang_system) },
+                        startAction = {
+                            RadioButton(selected = tag == langTag, onClick = null)
+                        },
+                        onClick = {
+                            langDialog = false
+                            if (tag != langTag) { AppPrefs.setLanguage(ctx, tag); onRestyle() }
+                        },
+                    )
                 }
-            },
-            confirmButton = { TextButton(onClick = { langDialog = false }) { Text(stringResource(R.string.cancel)) } },
-        )
+            }
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.cancel), onClick = { langDialog = false }),
+            ))
+        }
     }
 
     UpdateDialog(
@@ -282,16 +275,15 @@ fun SettingsContent(
 
 @Composable
 private fun AboutCard() {
-    Card(shape = MaterialTheme.shapes.extraLarge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-        Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)))
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text("AndroPaw", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                Text(stringResource(R.string.as_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text("AndroPaw", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.as_version, BuildConfig.VERSION_NAME), fontSize = 12.sp)
                 Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.as_about), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(stringResource(R.string.as_about), fontSize = 13.sp)
             }
         }
     }
@@ -300,25 +292,34 @@ private fun AboutCard() {
 @Composable
 private fun Section(title: String, subtitle: String? = null, content: @Composable () -> Unit) {
     Column {
-        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary,
+        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.primary,
             modifier = Modifier.padding(start = 8.dp, bottom = if (subtitle == null) 8.dp else 0.dp))
         subtitle?.let {
-            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Text(it, fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier.padding(start = 8.dp, bottom = 8.dp))
         }
-        Card(shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-            Column(Modifier.padding(vertical = 8.dp)) { content() }
+        Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(vertical = 8.dp)) {
+            content()
         }
     }
 }
 
 @Composable
 private fun Row_(icon: ImageVector, title: String, sub: String, mono: Boolean = false, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(sub, fontFamily = if (mono) FontFamily.Monospace else null, maxLines = 2) },
-        leadingContent = { Icon(icon, null, tint = MaterialTheme.colorScheme.primary) },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    BasicComponent(
+        title = title,
+        summary = sub,
+        startAction = { Icon(icon, null, tint = MiuixTheme.colorScheme.primary) },
+        onClick = onClick,
+    )
+}
+
+/** A settings row with a miuix switch, used on this page and by the per-machine settings sheet. */
+@Composable
+internal fun Toggle(title: String, sub: String, on: Boolean, set: (Boolean) -> Unit) {
+    BasicComponent(
+        title = title,
+        summary = sub,
+        endActions = { Switch(checked = on, onCheckedChange = set) },
     )
 }

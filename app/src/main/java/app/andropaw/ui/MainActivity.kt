@@ -12,59 +12,43 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.rounded.FileOpen
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Android
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -73,29 +57,42 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andropaw.BuildConfig
+import app.andropaw.R
+import app.andropaw.core.GuestImage
 import app.andropaw.update.AppUpdateManager
 import app.andropaw.update.ReleaseInfo
 import app.andropaw.update.UpdateState
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import app.andropaw.core.GuestImage
-import app.andropaw.R
-import androidx.compose.ui.res.stringResource
-import androidx.compose.material.icons.rounded.Settings
-import android.content.Context
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Checkbox
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.RadioButton
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.glass.GlassIconButton
 import top.yukonga.miuix.kmp.glass.GlassNavigationBar
 import top.yukonga.miuix.kmp.glass.GlassNavigationItem
 import top.yukonga.miuix.kmp.glass.GlassTopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 const val ACTION_BOOT = "app.andropaw.BOOT"
 
@@ -163,6 +160,10 @@ class MainActivity : ComponentActivity() {
  *
  * Both pages scroll under one [GlassTopAppBar] and share a single glass backdrop, captured by
  * [rememberGlassPageBackdrop] and handed to the bar and the [GlassNavigationBar].
+ *
+ * The floating [GlassNavigationBar] pads itself with the system navigation-bar inset, floored at
+ * 12 dp: gesture bars keep their own height, three-button nav keeps its (taller) inset, and
+ * devices without any nav bar still get the fallback clearance so the capsule never sits flush.
  */
 @Composable
 fun Library(model: LibraryModel, onRestyle: () -> Unit) {
@@ -235,15 +236,23 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             )
         },
         bottomBar = {
-            GlassNavigationBar(
-                items = listOf(
-                    GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
-                    GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
-                ),
-                selectedIndex = tab,
-                onSelect = { tab = it },
-                backdrop = page.backdrop,
-            )
+            // System navigation-bar inset with a floor: max(real inset, 12 dp). windowInsetsPadding
+            // consumes it, so the Scaffold's content padding never double-counts the inset.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets(bottom = 12.dp)))
+            ) {
+                GlassNavigationBar(
+                    items = listOf(
+                        GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                        GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
+                    ),
+                    selectedIndex = tab,
+                    onSelect = { tab = it },
+                    backdrop = page.backdrop,
+                )
+            }
         },
         floatingActionButton = {
             if (tab == 0) {
@@ -254,10 +263,10 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     ) { pad ->
         Box(Modifier.fillMaxSize().then(page.contentModifier).padding(pad)) {
             if (tab == 0) {
-                val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> androidx.compose.foundation.lazy.grid.GridItemSpan =
-                    { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }
-                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                    columns = androidx.compose.foundation.lazy.grid.GridCells.Adaptive(148.dp),
+                val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan =
+                    { GridItemSpan(maxLineSpan) }
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(148.dp),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -286,7 +295,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                     }
                 }
             } else {
-                SettingsContent(onRestyle = onRestyle, padding = PaddingValues(0.dp))
+                SettingsContent(onRestyle = onRestyle, padding = pad)
             }
         }
     }
@@ -295,39 +304,51 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         SettingsSheet(img, onDismiss = { settingsFor = null }, onSave = { s -> model.updateSettings(img, s); settingsFor = null })
     }
     resetFor?.let { img ->
-        AlertDialog(
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.reset_title, img.name),
+            summary = stringResource(R.string.reset_text),
             onDismissRequest = { resetFor = null },
-            icon = { Icon(Icons.Rounded.Delete, null) },
-            title = { Text(stringResource(R.string.reset_title, img.name)) },
-            text = { Text(stringResource(R.string.reset_text)) },
-            confirmButton = { Button(onClick = {
-                resetFor = null
-                if (model.vmRunning()) android.widget.Toast.makeText(ctx, R.string.reset_running, android.widget.Toast.LENGTH_LONG).show()
-                else model.resetData(img)
-            }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(stringResource(R.string.reset_data)) } },
-            dismissButton = { TextButton(onClick = { resetFor = null }) { Text(stringResource(R.string.cancel)) } },
-        )
+        ) {
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.cancel), onClick = { resetFor = null }),
+                DialogAction(stringResource(R.string.reset_data), onClick = {
+                    resetFor = null
+                    if (model.vmRunning()) android.widget.Toast.makeText(ctx, R.string.reset_running, android.widget.Toast.LENGTH_LONG).show()
+                    else model.resetData(img)
+                }, primary = true, destructive = true),
+            ))
+        }
     }
     deleteFor?.let { img ->
-AlertDialog(
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.delete_title, img.name),
+            summary = stringResource(R.string.delete_text, Formatter.formatShortFileSize(ctx, img.sizeBytes)),
             onDismissRequest = { deleteFor = null },
-            icon = { Icon(Icons.Rounded.Delete, null) },
-            title = { Text(stringResource(R.string.delete_title, img.name)) },
-            text = { Text(stringResource(R.string.delete_text, Formatter.formatShortFileSize(ctx, img.sizeBytes))) },
-            confirmButton = { Button(onClick = { model.delete(img); deleteFor = null },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(stringResource(R.string.delete)) } },
-            dismissButton = { TextButton(onClick = { deleteFor = null }) { Text(stringResource(R.string.cancel)) } },
-        )
+        ) {
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.cancel), onClick = { deleteFor = null }),
+                DialogAction(stringResource(R.string.delete), onClick = { model.delete(img); deleteFor = null },
+                    primary = true, destructive = true),
+            ))
+        }
     }
     renameFor?.let { img ->
         var name by remember { mutableStateOf(img.name) }
-        AlertDialog(
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.name),
             onDismissRequest = { renameFor = null },
-            title = { Text(stringResource(R.string.name)) },
-            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
-            confirmButton = { Button(onClick = { model.rename(img, name.trim().ifEmpty { img.name }); renameFor = null }) { Text(stringResource(R.string.save)) } },
-            dismissButton = { TextButton(onClick = { renameFor = null }) { Text(stringResource(R.string.cancel)) } },
-        )
+        ) {
+            TextField(value = name, onValueChange = { name = it }, singleLine = true, label = "")
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.cancel), onClick = { renameFor = null }),
+                DialogAction(stringResource(R.string.save), onClick = {
+                    model.rename(img, name.trim().ifEmpty { img.name }); renameFor = null
+                }, primary = true),
+            ))
+        }
     }
     if (help) HelpDialog(onDismiss = { help = false })
     if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
@@ -373,126 +394,69 @@ private fun ContainerDialog(
         }
     }
 
-    AlertDialog(
+    MiuixDialog(
+        show = true,
+        title = stringResource(R.string.vmos_add_title),
         onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Rounded.ContentCopy, null, tint = MaterialTheme.colorScheme.primary) },
-        title = {
-            Text(
-                stringResource(R.string.vmos_add_title),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-            )
-        },
-        text = {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(
+            Modifier.verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Base ROM Card
+            Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(12.dp)) {
+                Text(stringResource(R.string.section_systems), fontSize = 12.sp, color = MiuixTheme.colorScheme.primary)
+                Text("${from.name} · ${from.displayVersion}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(from.skin, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            }
+
+            // Name field
+            TextField(value = name, onValueChange = { name = it }, label = stringResource(R.string.name), singleLine = true)
+
+            // Presets
+            Text(stringResource(R.string.vmos_preset_title), fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SelectChip(selected = preset == 0, label = stringResource(R.string.vmos_preset_perf),
+                    onClick = { applyPreset(0) }, modifier = Modifier.weight(1f))
+                SelectChip(selected = preset == 1, label = stringResource(R.string.vmos_preset_balanced),
+                    onClick = { applyPreset(1) }, modifier = Modifier.weight(1f))
+                SelectChip(selected = preset == 2, label = stringResource(R.string.vmos_preset_lite),
+                    onClick = { applyPreset(2) }, modifier = Modifier.weight(1f))
+            }
+
+            // Toggles
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { copy = !copy },
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Base ROM Card
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            stringResource(R.string.section_systems),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            "${from.name} · ${from.displayVersion}",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                        )
-                        Text(
-                            from.skin,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                Checkbox(state = ToggleableState(copy), onClick = { copy = it })
+                Text(stringResource(R.string.container_copy_data), fontSize = 15.sp)
+            }
 
-                // Name field
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text(stringResource(R.string.name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Presets
-                Text(
-                    stringResource(R.string.vmos_preset_title),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+            if (has32) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    FilterChip(
-                        selected = preset == 0,
-                        onClick = { applyPreset(0) },
-                        label = { Text(stringResource(R.string.vmos_preset_perf)) },
-                        leadingIcon = { Icon(Icons.Rounded.PlayArrow, null, Modifier.size(16.dp)) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = preset == 1,
-                        onClick = { applyPreset(1) },
-                        label = { Text(stringResource(R.string.vmos_preset_balanced)) },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = preset == 2,
-                        onClick = { applyPreset(2) },
-                        label = { Text(stringResource(R.string.vmos_preset_lite)) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // Toggles
-                Row(
-                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable { copy = !copy },
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable {
+                        settings = settings.copy(native32 = !settings.native32)
+                    },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Checkbox(copy, { copy = it })
-                    Text(stringResource(R.string.container_copy_data), style = MaterialTheme.typography.bodyMedium)
-                }
-
-                if (has32) {
-                    Row(
-                        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable {
-                            settings = settings.copy(native32 = !settings.native32)
-                        },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(settings.native32, { settings = settings.copy(native32 = it) })
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.vs_native32), style = MaterialTheme.typography.bodyMedium)
-                            Text(stringResource(R.string.vs_native32_sub), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                    Checkbox(state = ToggleableState(settings.native32), onClick = { settings = settings.copy(native32 = it) })
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.vs_native32), fontSize = 15.sp)
+                        Text(stringResource(R.string.vs_native32_sub), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     }
                 }
+            }
 
-                Text(
-                    stringResource(R.string.container_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onCreate(from, name.trim().ifEmpty { from.name }, copy, settings) }) {
-                Text(stringResource(R.string.container_create))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
-        },
-    )
+            Text(stringResource(R.string.container_hint), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        }
+        DialogButtonRow(listOf(
+            DialogAction(stringResource(R.string.cancel), onClick = onDismiss),
+            DialogAction(stringResource(R.string.container_create), onClick = {
+                onCreate(from, name.trim().ifEmpty { from.name }, copy, settings)
+            }, primary = true),
+        ))
+    }
 }
 
 /** All-files access: the guest's shared folder lives in «Internal storage/AndroPaw». */
@@ -510,87 +474,86 @@ private fun StorageAccessCard() {
         onDispose { life.lifecycle.removeObserver(obs) }
     }
     if (granted) return
-    Card(shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
-        Column(Modifier.padding(20.dp)) {
-            Text(stringResource(R.string.storage_title), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            Text(stringResource(R.string.storage_text), style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = {
-                runCatching {
-                    ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                        android.net.Uri.parse("package:${ctx.packageName}")))
-                }.onFailure { ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
-            }) { Text(stringResource(R.string.allow)) }
-        }
+    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+        Text(stringResource(R.string.storage_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(stringResource(R.string.storage_text), fontSize = 14.sp)
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = {
+            runCatching {
+                ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    android.net.Uri.parse("package:${ctx.packageName}")))
+            }.onFailure { ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+        }) { Text(stringResource(R.string.allow)) }
     }
 }
 
 @Composable
 private fun EmptyState(onHelp: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(112.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Android, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-        }
+        Box(
+            Modifier.size(112.dp).clip(CircleShape).background(MiuixTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Rounded.Android, null, Modifier.size(56.dp), tint = MiuixTheme.colorScheme.onPrimaryContainer) }
         Spacer(Modifier.height(24.dp))
-        Text(stringResource(R.string.empty_title), style = MaterialTheme.typography.headlineSmall)
+        Text(stringResource(R.string.empty_title), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(8.dp))
         Text(stringResource(R.string.empty_text),
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
-        TextButton(onClick = onHelp) { Text(stringResource(R.string.empty_help)) }
+        TextButton(text = stringResource(R.string.empty_help), onClick = onHelp)
     }
 }
 
 @Composable
 private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = if (s.error != null) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer),
-        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+        insideMargin = PaddingValues(20.dp),
     ) {
-        Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (s.active) CircularProgressIndicator(Modifier.size(40.dp)) else Icon(if (s.error != null) Icons.Rounded.Warning else Icons.Rounded.Android, null)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(when { s.error != null -> stringResource(R.string.import_failed); s.active -> stringResource(R.string.import_running); else -> stringResource(R.string.import_done) },
-                        style = MaterialTheme.typography.titleMedium)
-                    Text(s.file, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (s.active) CircularProgressIndicator(Modifier.size(40.dp))
+            else Icon(if (s.error != null) Icons.Rounded.Warning else Icons.Rounded.Android, null)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(when { s.error != null -> stringResource(R.string.import_failed); s.active -> stringResource(R.string.import_running); else -> stringResource(R.string.import_done) },
+                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(s.file, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Spacer(Modifier.height(12.dp))
-            when {
-                s.error != null -> Text(s.error, style = MaterialTheme.typography.bodyMedium)
-                s.active -> {
-                    if (s.progress in 0f..1f) LinearProgressIndicator(progress = s.progress, modifier = Modifier.fillMaxWidth())
-                    else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    Text(s.step, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                s.done != null -> {
-                    Text("${s.done.name} · ${s.done.displayVersion} · ${s.done.skin}", style = MaterialTheme.typography.bodyMedium)
-                    s.done.warnings.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
-                }
+        }
+        Spacer(Modifier.height(12.dp))
+        when {
+            s.error != null -> Text(s.error, fontSize = 14.sp)
+            s.active -> {
+                if (s.progress in 0f..1f) LinearProgressIndicator(progress = s.progress, modifier = Modifier.fillMaxWidth())
+                else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                Text(s.step, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                if (s.active) TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) } else TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
+            s.done != null -> {
+                Text("${s.done.name} · ${s.done.displayVersion} · ${s.done.skin}", fontSize = 14.sp)
+                s.done.warnings.forEach { Text("• $it", fontSize = 12.sp) }
             }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            if (s.active) TextButton(text = stringResource(R.string.cancel), onClick = onCancel)
+            else TextButton(text = stringResource(R.string.ok), onClick = onDismiss)
         }
     }
 }
 
 @Composable
 private fun HelpDialog(onDismiss: () -> Unit) {
-    AlertDialog(
+    MiuixDialog(
+        show = true,
+        title = stringResource(R.string.help_title),
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.help_title)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text(stringResource(R.string.help_text))
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
-    )
+    ) {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text(stringResource(R.string.help_text), fontSize = 14.sp)
+        }
+        DialogButtonRow(listOf(DialogAction(stringResource(R.string.ok), onClick = onDismiss, primary = true)))
+    }
 }

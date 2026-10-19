@@ -1,20 +1,19 @@
 package app.andropaw.ui
 
 import android.text.format.Formatter
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -32,32 +31,10 @@ import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.rounded.RestartAlt
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,15 +44,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.andropaw.R
 import app.andropaw.core.GuestImage
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * The vendor's look for a machine card: a "screen" gradient that tells TouchWiz, MIUI, Sense, Xperia… apart at a
@@ -110,103 +94,114 @@ fun MachineCard(
     onDelete: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    val press = remember { MutableInteractionSource() }
-    val pressed by press.collectIsPressedAsState()
-    // expressive press: the card gives a little under the finger and springs back
-    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium), label = "press")
-    var menu by remember { mutableStateOf(false) }
-    ElevatedCard(
+    Card(
+        modifier = modifier,
         onClick = onStart,
-        interactionSource = press,
-        shape = MaterialTheme.shapes.extraLarge,
-        modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+        insideMargin = PaddingValues(0.dp),
+        cornerRadius = 24.dp,
     ) {
         Box(
             Modifier.padding(8.dp).fillMaxWidth().aspectRatio(0.9f).clip(RoundedCornerShape(24.dp))
                 .background(Brush.linearGradient(skinColors(img))),
         ) {
-            Text(img.skin, style = MaterialTheme.typography.labelLarge, color = Color.White.copy(alpha = 0.9f),
+            Text(img.skin, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.9f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 14.dp, end = 48.dp))
             Box(Modifier.align(Alignment.TopEnd)) {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.menu), tint = Color.White) }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(text = { Text(stringResource(R.string.settings)) }, leadingIcon = { Icon(Icons.Rounded.Tune, null) },
-                        onClick = { menu = false; onSettings() })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.rename)) }, leadingIcon = { Icon(Icons.Rounded.Edit, null) },
-                        onClick = { menu = false; onRename() })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.new_machine)) }, leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
-                        onClick = { menu = false; onNewMachine() })
-                    HorizontalDivider()
-                    DropdownMenuItem(text = { Text(stringResource(R.string.reset_data)) }, leadingIcon = { Icon(Icons.Rounded.RestartAlt, null) },
-                        onClick = { menu = false; onReset() })
-                    DropdownMenuItem(text = { Text(stringResource(R.string.delete)) }, leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-                        onClick = { menu = false; onDelete() })
-                }
+                GlassMenuButton(
+                    icon = Icons.Rounded.MoreVert,
+                    contentDescription = stringResource(R.string.menu),
+                    iconTint = Color.White,
+                    items = listOf(
+                        GlassMenuItem(stringResource(R.string.settings), Icons.Rounded.Tune) { onSettings() },
+                        GlassMenuItem(stringResource(R.string.rename), Icons.Rounded.Edit) { onRename() },
+                        GlassMenuItem(stringResource(R.string.new_machine), Icons.Rounded.ContentCopy) { onNewMachine() },
+                        GlassMenuItem(stringResource(R.string.reset_data), Icons.Rounded.RestartAlt) { onReset() },
+                        GlassMenuItem(stringResource(R.string.delete), Icons.Rounded.Delete) { onDelete() },
+                    ),
+                )
             }
             Column(Modifier.align(Alignment.Center).padding(bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(img.release.substringBefore(' ').take(5), style = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold, color = Color.White)
-                Text("API ${img.api}", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.8f))
+                Text(img.release.substringBefore(' ').take(5), fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text("API ${img.api}", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f))
             }
-            FilledIconButton(
-                onClick = onStart,
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.White, contentColor = skinColors(img).last()),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).size(44.dp),
-            ) { Icon(Icons.Rounded.PlayArrow, stringResource(R.string.start)) }
+            Box(
+                Modifier.align(Alignment.BottomEnd).padding(10.dp).size(44.dp)
+                    .clip(CircleShape).background(Color.White).clickable(onClick = onStart),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.PlayArrow, stringResource(R.string.start), tint = skinColors(img).last())
+            }
         }
-        Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
-            Text(img.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 14.dp)) {
+            Text(img.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
                 listOfNotNull(
                     img.settings.let { "${it.width}×${it.height}" },
                     Formatter.formatShortFileSize(ctx, img.sizeBytes),
                     if (img.lastBootMs > 0) "${img.lastBootMs / 1000} s" else null,
                 ).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1,
             )
-            if (baseName != null) Text(stringResource(R.string.container_of, baseName), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (baseName != null) Text(stringResource(R.string.container_of, baseName), fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 /**
- * "+": a FAB menu — import a firmware file, or open the firmware library.
- *
- * AndroPaw: the original used the Material3 *Expressive* `FloatingActionButtonMenu` /
- * `ToggleFloatingActionButton`, which only exist in Material3 1.4+. Miuix 0.9.4 requires the
- * Material3 1.3.x baseline (same as Termux-Ultra), so the menu is rebuilt from the stable
- * `FloatingActionButton` / `SmallFloatingActionButton` pair available in 1.3.0.
+ * "+": a FAB menu — import a firmware file, or open the firmware library, built from miuix
+ * tokens (the Material3 *Expressive* `FloatingActionButtonMenu` the original used does not exist
+ * on the Material3 1.3.x baseline Miuix 0.9.4 requires).
  */
 @Composable
 fun HomeFab(expanded: Boolean, onToggle: (Boolean) -> Unit, onImport: () -> Unit, onLibrary: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         AnimatedVisibility(visible = expanded) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                SmallFloatingActionButton(
-                    onClick = { onToggle(false); onLibrary() },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ) { Icon(Icons.Rounded.Inventory2, stringResource(R.string.lib_title)) }
+                FabButton(Icons.Rounded.Inventory2, stringResource(R.string.lib_title),
+                    bg = MiuixTheme.colorScheme.secondaryContainer, fg = MiuixTheme.colorScheme.onSecondaryContainer,
+                    onClick = { onToggle(false); onLibrary() })
                 Spacer(Modifier.height(12.dp))
-                SmallFloatingActionButton(
-                    onClick = { onToggle(false); onImport() },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ) { Icon(Icons.Rounded.FileOpen, stringResource(R.string.add_import)) }
+                FabButton(Icons.Rounded.FileOpen, stringResource(R.string.add_import),
+                    bg = MiuixTheme.colorScheme.secondaryContainer, fg = MiuixTheme.colorScheme.onSecondaryContainer,
+                    onClick = { onToggle(false); onImport() })
                 Spacer(Modifier.height(12.dp))
             }
         }
-        FloatingActionButton(onClick = { onToggle(!expanded) }) {
-            Icon(if (expanded) Icons.Rounded.Close else Icons.Rounded.Add, stringResource(R.string.add_firmware))
-        }
+        FabButton(Icons.Rounded.Close, stringResource(R.string.add_firmware),
+            bg = MiuixTheme.colorScheme.primary, fg = MiuixTheme.colorScheme.onPrimary,
+            swapIcon = !expanded, onClick = { onToggle(!expanded) })
+    }
+}
+
+/** A circular floating action button on miuix tokens. */
+@Composable
+private fun FabButton(
+    icon: ImageVector,
+    contentDescription: String,
+    bg: Color,
+    fg: Color,
+    modifier: Modifier = Modifier,
+    swapIcon: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .size(56.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(if (swapIcon) Icons.Rounded.Add else icon, contentDescription, tint = fg)
     }
 }
 
 /**
  * The firmware library (VMOS-style): every imported firmware with "new machine", plus firmware files waiting in
- * Internal storage/aemulator/firmware and the import button.
+ * Internal storage/andropaw/firmware and the import button — a miuix WindowDialog (bottom sheet on phones).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibrarySheet(
     firmwares: List<GuestImage>,
@@ -220,50 +215,25 @@ fun LibrarySheet(
         val t = Thread { files = app.andropaw.core.FirmwareFolder.list() }.apply { start() }
         onDispose { t.interrupt() }
     }
-    ModalBottomSheet(
+    WindowDialog(
+        show = true,
+        title = stringResource(R.string.vmos_add_title),
+        summary = stringResource(R.string.add_container_sub),
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Column(
             Modifier
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 36.dp)
+                .heightIn(max = 560.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.vmos_add_title),
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        stringResource(R.string.add_container_sub),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                FilledIconButton(
-                    onClick = onDismiss,
-                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
-                ) {
-                    Icon(Icons.Rounded.Close, stringResource(R.string.close))
-                }
-            }
-
             // Quick Import Card
-            ElevatedCard(
+            Card(
                 onClick = onImportFile,
-                shape = MaterialTheme.shapes.extraLarge,
-                colors = androidx.compose.material3.CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = PaddingValues(16.dp),
             ) {
                 Row(
-                    Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
@@ -271,65 +241,35 @@ fun LibrarySheet(
                         Modifier
                             .size(48.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
+                            .background(MiuixTheme.colorScheme.primary),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            Icons.Rounded.FileOpen,
-                            null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Icon(Icons.Rounded.FileOpen, null, tint = MiuixTheme.colorScheme.onPrimary, modifier = Modifier.size(24.dp))
                     }
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.add_import),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            stringResource(R.string.add_import_sub),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
+                        Text(stringResource(R.string.add_import), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.add_import_sub), fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     }
                 }
             }
 
             // Section: Installed ROMs (VMOS-style)
-            Text(
-                stringResource(R.string.vmos_tab_roms),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Text(stringResource(R.string.vmos_tab_roms), fontSize = 16.sp, fontWeight = FontWeight.Bold)
 
             if (firmwares.isEmpty()) {
-                Surface(
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        stringResource(R.string.lib_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(16.dp)) {
+                    Text(stringResource(R.string.lib_empty), fontSize = 14.sp,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                 }
             } else {
                 for (fw in firmwares) {
-                    ElevatedCard(
+                    Card(
                         onClick = { onNewMachine(fw) },
-                        shape = MaterialTheme.shapes.large,
-                        colors = androidx.compose.material3.CardDefaults.elevatedCardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        insideMargin = PaddingValues(14.dp),
                     ) {
                         Row(
-                            Modifier.padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
@@ -340,31 +280,15 @@ fun LibrarySheet(
                                     .background(Brush.linearGradient(skinColors(fw))),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    fw.release.take(4),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
+                                Text(fw.release.take(4), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                             }
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    fw.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    "${fw.displayVersion} · ${fw.skin}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Text(fw.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${fw.displayVersion} · ${fw.skin}", fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             }
-                            Button(
-                                onClick = { onNewMachine(fw) },
-                                shape = MaterialTheme.shapes.medium
-                            ) {
+                            Button(onClick = { onNewMachine(fw) }) {
                                 Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.container_create))
@@ -377,45 +301,28 @@ fun LibrarySheet(
             // Section: Firmware files in folder
             if (files.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.fw_folder_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Text(stringResource(R.string.fw_folder_title), fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.primary)
                 for (f in files.take(12)) {
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(12.dp)) {
                         Row(
-                            Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(Icons.Rounded.Inventory2, null, tint = MaterialTheme.colorScheme.secondary)
+                            Icon(Icons.Rounded.Inventory2, null, tint = MiuixTheme.colorScheme.secondary)
                             Column(Modifier.weight(1f)) {
-                                Text(
-                                    f.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    "${f.length() / 1_048_576} MB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Text(f.name, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${f.length() / 1_048_576} MB", fontSize = 12.sp,
+                                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                             }
-                            FilledTonalButton(onClick = { onImportFolder(f) }) {
-                                Text(stringResource(R.string.fw_folder_import))
-                            }
+                            TextButton(text = stringResource(R.string.fw_folder_import), onClick = { onImportFolder(f) })
                         }
                     }
                 }
             }
+
+            TextButton(text = stringResource(R.string.close), onClick = onDismiss, modifier = Modifier.align(Alignment.CenterHorizontally))
         }
     }
 }
