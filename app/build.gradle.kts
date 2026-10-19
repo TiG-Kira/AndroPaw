@@ -41,7 +41,8 @@ tasks.named("preBuild") { dependsOn(packEngines) }
 
 android {
     namespace = "app.andropaw"
-    compileSdk = 36
+    // Miuix 0.9.4 (miuix-ui-android / miuix-preference-android) is built against android-37.
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26

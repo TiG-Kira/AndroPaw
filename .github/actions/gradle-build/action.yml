@@ -63,6 +63,34 @@ runs:
         echo "✅ 已检出 GitHub Packages 凭据（user=${GPR_USER}）"
 
     # ══════════════════════════════════════════════════════════════
+    # 0b. 确保 android-37 平台已安装
+    #     Miuix 0.9.4 是按 compileSdk 37 构建的，AGP 9 也会校验该平台是否存在；
+    #     runner 镜像自带的平台版本随镜像变动，这里显式补装，避免
+    #     "SDK location not found / failed to find target android-37"。
+    # ══════════════════════════════════════════════════════════════
+    - name: 安装 Android 平台 37
+      shell: bash
+      run: |
+        set -uo pipefail
+        SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+        echo "ANDROID_HOME=${SDK}"
+        if [ -d "${SDK}/platforms/android-37" ]; then
+          echo "✅ android-37 已存在，跳过安装"
+          exit 0
+        fi
+        CMDLINE="${SDK}/cmdline-tools/latest/bin/sdkmanager"
+        if [ ! -x "${CMDLINE}" ]; then
+          CMDLINE=$(command -v sdkmanager || true)
+        fi
+        if [ -z "${CMDLINE}" ]; then
+          echo "::warning::未找到 sdkmanager，跳过安装；若构建报缺少 android-37 请检查 runner 镜像"
+          exit 0
+        fi
+        yes | "${CMDLINE}" --sdk_root="${SDK}" --licenses >/dev/null 2>&1 || true
+        "${CMDLINE}" --sdk_root="${SDK}" "platforms;android-37" "build-tools;36.0.0"
+        echo "✅ android-37 安装完成"
+
+    # ══════════════════════════════════════════════════════════════
     # 1. 计算缓存键
     #    键的维度：锁文件哈希 / 操作系统 / 工具链(JDK+Gradle+AGP) / 构建变体 / 剖面。
     #    故意不含 commit 或分支 SHA —— 否则每次推送都必然是一次全新键、必然
