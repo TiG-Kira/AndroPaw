@@ -139,7 +139,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: andropaw-release-apks
-          archive: false
+          archive: true
           if-no-files-found: error
           path: release-apks/*/*.apk
 

@@ -64,6 +64,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: andropaw-debug-arm64-v8a
-          archive: false
+          archive: true
           if-no-files-found: error
           path: app/build/outputs/apk/standard/debug/*.apk
