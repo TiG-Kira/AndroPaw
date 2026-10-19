@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Генерирует res/values*/strings.xml и res/xml/locales_config.xml из langs/*.py.
 Запуск: python app/l10n/gen.py  (английский — язык по умолчанию, values/)."""
-import os, runpy, sys
+import os, re, runpy, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RES = os.path.join(HERE, "..", "src", "main", "res")
@@ -29,6 +29,25 @@ def load(code):
     return runpy.run_path(os.path.join(HERE, "langs", code + ".py"))["S"]
 
 
+# Один <string name="…">…</string> целиком (многострочные значения тоже захватываются).
+ENTRY = re.compile(r'[ \t]*<string\b[^>]*\bname="([^"]+)"[^>]*>.*?</string>\n?', re.S)
+
+
+def merge_with_existing(path, generated):
+    """l10n-таблицы покрывают не все строки: часть UI-строк живёт только в
+    values*/strings.xml (new_machine, vmos_*, m_*, as_* …). Раньше gen.py
+    перезаписывал файл целиком и молча выбрасывал их — компилятор потом
+    ругался 'Unresolved reference'. Теперь существующий файл — база,
+    сгенерированные ключи перекрывают его, остальные дописываются."""
+    merged = {}
+    if os.path.isfile(path):
+        for m in ENTRY.finditer(open(path, encoding="utf-8").read()):
+            merged[m.group(1)] = m.group(0)
+    for m in ENTRY.finditer("".join(line + "\n" for line in generated)):
+        merged[m.group(1)] = m.group(0)
+    return "".join(merged.values())
+
+
 def main():
     en = load("en")
     missing = [k for k in KEYS if k not in en]
@@ -45,11 +64,13 @@ def main():
         for k in KEYS:
             if k in s:
                 out.append(f'    <string name="{k}">{esc(s[k])}</string>')
-        out.append("</resources>\n")
         path = os.path.join(RES, d)
         os.makedirs(path, exist_ok=True)
-        with open(os.path.join(path, "strings.xml"), "w", encoding="utf-8", newline="\n") as f:
-            f.write("\n".join(out))
+        target = os.path.join(path, "strings.xml")
+        # out[0] — <?xml …?>, out[1] — комментарий, out[2] — <resources>, далее строки
+        body = merge_with_existing(target, out[3:])
+        with open(target, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out[:3]) + "\n" + body + "</resources>\n")
     tags = [c for c in DIRS]
     xml = ['<?xml version="1.0" encoding="utf-8"?>', '<locale-config xmlns:android="http://schemas.android.com/apk/res/android">']
     xml += [f'    <locale android:name="{t}" />' for t in tags]

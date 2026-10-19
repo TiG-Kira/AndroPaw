@@ -151,7 +151,6 @@ fun MachineCard(
             }
             FilledIconButton(
                 onClick = onStart,
-                shapes = IconButtonDefaults.shapes(),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.White, contentColor = skinColors(img).last()),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).size(44.dp),
             ) { Icon(Icons.Rounded.PlayArrow, stringResource(R.string.start)) }

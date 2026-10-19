@@ -390,6 +390,18 @@ runs:
           fi
           echo '```'
           echo ""
+          # Manifest merger 的详细原因只落在 app/build/outputs/logs/ 里，不在 stdout，
+          # 不下钻就只能看到一句 "Manifest merger failed with multiple errors, see logs"。
+          for f in app/build/outputs/logs/manifest-merger-*.txt; do
+            if [ -f "$f" ]; then
+              echo "### Manifest merger: $(basename "$f")"
+              echo ""
+              echo '```text'
+              tail -40 "$f"
+              echo '```'
+              echo ""
+            fi
+          done
           echo "### 排查线索"
           echo ""
           echo "- 缓存命中情况：见本 summary 上方「缓存命中情况」小节"
