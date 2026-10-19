@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -430,7 +431,7 @@ private fun ContainerDialog(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { copy = !copy },
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Checkbox(state = ToggleableState(copy), onClick = { copy = it })
+                Checkbox(state = ToggleableState(copy), onClick = { copy = !copy })
                 Text(stringResource(R.string.container_copy_data), fontSize = 15.sp)
             }
 
@@ -441,7 +442,7 @@ private fun ContainerDialog(
                     },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Checkbox(state = ToggleableState(settings.native32), onClick = { settings = settings.copy(native32 = it) })
+                    Checkbox(state = ToggleableState(settings.native32), onClick = { settings = settings.copy(native32 = !settings.native32) })
                     Column(Modifier.weight(1f)) {
                         Text(stringResource(R.string.vs_native32), fontSize = 15.sp)
                         Text(stringResource(R.string.vs_native32_sub), fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
