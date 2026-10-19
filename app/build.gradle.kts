@@ -14,6 +14,19 @@ val signProps = Properties().apply {
 }
 val canSign = signProps.getProperty("storeFile")?.let { rootProject.file(it).isFile } == true
 
+// storeType：keystore.properties 可显式指定；没指定就按魔数嗅探。
+// 常见坑：从 IDE / macOS 钥匙串导出的私钥常常是「扩展名 .jks、内容却是 PKCS12」，
+// 而 Gradle 的 signingConfig 默认按 JKS 解析，会在打包期抛
+// "Failed to read key ... from store: Invalid keystore format"。
+fun detectStoreType(file: File): String = runCatching {
+    val head = ByteArray(4)
+    val read = file.inputStream().use { it.read(head) }
+    if (read >= 4 && head[0] == 0xFE.toByte() && head[1] == 0xED.toByte()) "jks" else "pkcs12"
+}.getOrDefault("jks")
+val signStoreType = signProps.getProperty("storeType")?.takeIf { it.isNotBlank() }
+    ?: signProps.getProperty("storeFile")?.let { detectStoreType(rootProject.file(it)) }
+    ?: "jks"
+
 // Engine guest files: every kernel carries its own copy of most of them (473 MB, 110 MB of it different, all stored
 // uncompressed because of their names). The APK gets each content once, compressed, as assets/blobs/<sha1>, plus
 // assets/engines.idx ("path<TAB>sha1<TAB>size"); the app reads them through core/EngineAssets.kt
@@ -74,6 +87,7 @@ android {
     signingConfigs {
         if (canSign) create("release") {
             storeFile = rootProject.file(signProps.getProperty("storeFile"))
+            storeType = signStoreType
             storePassword = signProps.getProperty("storePassword")
             keyAlias = signProps.getProperty("keyAlias")
             keyPassword = signProps.getProperty("keyPassword")

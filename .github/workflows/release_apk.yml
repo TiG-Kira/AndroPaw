@@ -37,6 +37,7 @@ permissions:
 #   ANDROPAW_STORE_PASSWORD     keystore 口令
 #   ANDROPAW_KEY_PASSWORD       私钥口令
 #   ANDROPAW_KEY_ALIAS          alias
+#   ANDROPAW_STORE_TYPE         可选，默认 pkcs12（本库的私钥是 .jks 扩展名的 PKCS12）
 # 解析见 app/build.gradle.kts 的 signingConfigs（读根目录 keystore.properties，已被 .gitignore 排除）。
 env:
   GPR_USER: ${{ secrets.GPR_USER || github.repository_owner }}
@@ -85,6 +86,7 @@ jobs:
       ANDROPAW_STORE_PASSWORD: ${{ secrets.ANDROPAW_STORE_PASSWORD }}
       ANDROPAW_KEY_PASSWORD: ${{ secrets.ANDROPAW_KEY_PASSWORD }}
       ANDROPAW_KEY_ALIAS: ${{ secrets.ANDROPAW_KEY_ALIAS }}
+      ANDROPAW_STORE_TYPE: ${{ secrets.ANDROPAW_STORE_TYPE }}
     steps:
       # 刻意检出触发的 tag 而不是 main：Release 上挂的必须是这个 tag 的代码。
       - name: 检出 tag
@@ -116,6 +118,7 @@ jobs:
           echo "JKS 写入完成：$(stat -c%s app/andropaw-release.jks) 字节"
           {
             echo "storeFile=app/andropaw-release.jks"
+            echo "storeType=${ANDROPAW_STORE_TYPE:-pkcs12}"
             echo "storePassword=${ANDROPAW_STORE_PASSWORD}"
             echo "keyAlias=${ANDROPAW_KEY_ALIAS}"
             echo "keyPassword=${ANDROPAW_KEY_PASSWORD}"

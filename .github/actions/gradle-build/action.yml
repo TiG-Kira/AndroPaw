@@ -109,8 +109,8 @@ runs:
       run: |
         set -uo pipefail
         LOCK_HASH="${{ hashFiles('**/gradle-wrapper.properties', '**/*.gradle', '**/*.gradle.kts', '**/gradle.properties', '**/libs.versions.toml') }}"
-        RUNNER_OS="ubuntu-24.04"
-        TOOLCHAIN="jdk21-temurin-gradle8.14.2-agp8.13.2"
+        RUNNER_OS="ubuntu-26.04"
+        TOOLCHAIN="jdk21-temurin-gradle9.7.1-agp9.1.0"
         VARIANT="${{ inputs.variant }}"
         PROFILE="${{ inputs.profile }}"
 
@@ -184,9 +184,9 @@ runs:
           ./*/.cxx
         key: ${{ steps.keys.outputs.build_key }}
         restore-keys: |
-          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle8.14.2-agp8.13.2-*-release-${{ inputs.profile }}
-          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle8.14.2-agp8.13.2-*-debug-${{ inputs.profile }}
-          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle8.14.2-agp8.13.2-${{ steps.keys.outputs.lock_hash }}-
+          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle9.7.1-agp9.1.0-*-release-${{ inputs.profile }}
+          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle9.7.1-agp9.1.0-*-debug-${{ inputs.profile }}
+          gha-build-${{ steps.keys.outputs.runners_os }}-jdk21-temurin-gradle9.7.1-agp9.1.0-${{ steps.keys.outputs.lock_hash }}-
 
     # ══════════════════════════════════════════════════════════════
     # 3. 缓存命中情况盘点：集中记录，失败报告直接引用
