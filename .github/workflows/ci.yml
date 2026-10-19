@@ -28,7 +28,7 @@ jobs:
     # Termux-Ultra 用的是 ubuntu-26.04；这里取 24.04 以保证 runner 一定可用，
     # 若要与上游完全对齐把这一行改回 ubuntu-26.04 即可（缓存键里的 RUNNER_OS
     # 常量在 .github/actions/gradle-build/action.yml 中同步修改）。
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
       # miuix-*-android 只发布在 GitHub Packages，跨仓库访问时 GITHUB_TOKEN 无效，

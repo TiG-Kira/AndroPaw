@@ -86,9 +86,13 @@ runs:
           echo "::warning::未找到 sdkmanager，跳过安装；若构建报缺少 android-37 请检查 runner 镜像"
           exit 0
         fi
-        yes | "${CMDLINE}" --sdk_root="${SDK}" --licenses >/dev/null 2>&1 || true
-        "${CMDLINE}" --sdk_root="${SDK}" "platforms;android-37" "build-tools;36.0.0"
-        echo "✅ android-37 安装完成"
+        echo "--- 已安装的平台 ---"
+        ls -1 "${SDK}/platforms" 2>/dev/null || echo "(platforms 目录不存在)"
+        echo "--- 可安装的平台（远端）---"
+        "${CMDLINE}" --sdk_root="${SDK}" --list 2>/dev/null | grep -oE "platforms;android-[0-9]+" | sort -u | tail -10 || true
+        yes 2>/dev/null | "${CMDLINE}" --sdk_root="${SDK}" --licenses >/dev/null 2>&1 || true
+        # 非致命：装不上就让 Gradle 自己报错，至少我们能从日志看到它要哪个平台。
+        "${CMDLINE}" --sdk_root="${SDK}" "platforms;android-37" || echo "::warning::未能安装 platforms;android-37（详见上方可用平台列表）"
 
     # ══════════════════════════════════════════════════════════════
     # 1. 计算缓存键

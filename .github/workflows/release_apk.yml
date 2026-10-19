@@ -45,7 +45,7 @@ env:
 jobs:
   # ── 1. 预检：Release 里是否已经有 APK ───────────────────────────────
   preflight:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       tag: ${{ steps.check.outputs.tag }}
       skip: ${{ steps.check.outputs.skip }}
@@ -78,7 +78,7 @@ jobs:
   build:
     needs: preflight
     if: needs.preflight.outputs.skip == 'false'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       JKS_BASE64: ${{ secrets.JKS_BASE64 }}
@@ -147,7 +147,7 @@ jobs:
   publish:
     needs: [preflight, build]
     if: always() && needs.preflight.outputs.skip == 'false' && needs.build.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: 下载全部 APK 产物
         uses: actions/download-artifact@v8
