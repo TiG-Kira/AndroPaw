@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -183,7 +185,19 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
     /** 0 = emulator page, 1 = settings page. */
     var tab by remember { mutableStateOf(0) }
+    /** Standalone About page, drawn over the shell. */
+    var about by remember { mutableStateOf(false) }
     val page = rememberGlassPageBackdrop()
+
+    // Termux-Ultra floating glass nav-bar placement: the bar is inset 24 dp on both sides and
+    // sits flush on top of the system navigation bars (plain inset, no floor), while the pages
+    // run full height and pass under bar and top bar alike.
+    val density = LocalDensity.current
+    val systemNavBarsHeight = with(density) {
+        WindowInsets.navigationBars.getBottom(density).toDp()
+    }
+    // The bar sinks off-screen while the IME is up, like Termux-Ultra's default nav bar.
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
     val scope = rememberCoroutineScope()
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
@@ -223,6 +237,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             GlassTopAppBar(
                 title = if (tab == 0) stringResource(R.string.app_name) else stringResource(R.string.settings),
@@ -238,23 +253,20 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             )
         },
         bottomBar = {
-            // System navigation-bar inset with a floor: max(real inset, 12 dp). windowInsetsPadding
-            // consumes it, so the Scaffold's content padding never double-counts the inset.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets(bottom = 12.dp)))
-            ) {
-                GlassNavigationBar(
-                    items = listOf(
-                        GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
-                        GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
-                    ),
-                    selectedIndex = tab,
-                    onSelect = { tab = it },
-                    backdrop = page.backdrop,
-                )
-            }
+            // Floating glass bar, Termux-Ultra default: 24 dp side margins, bottom edge riding the
+            // system navigation bars exactly (plain inset, no floor). No wrapper Box, no union
+            // insets — the bar floats over the content instead of docking to it.
+            GlassNavigationBar(
+                items = listOf(
+                    GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                    GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
+                ),
+                selectedIndex = tab,
+                onSelect = { tab = it },
+                visible = !imeVisible,
+                backdrop = page.backdrop,
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = systemNavBarsHeight),
+            )
         },
         floatingActionButton = {
             if (tab == 0) {
@@ -263,14 +275,21 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             }
         },
     ) { pad ->
-        Box(Modifier.fillMaxSize().then(page.contentModifier).padding(pad)) {
+        // Pages run full height and pass under the glass bars — the Scaffold padding is spent as
+        // scrollable content clearance, never as layout padding. That's what gives both bars
+        // something to refract.
+        Box(Modifier.fillMaxSize().then(page.contentModifier)) {
             if (tab == 0) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan =
                     { GridItemSpan(maxLineSpan) }
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(148.dp),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 88.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp, end = 16.dp,
+                        top = pad.calculateTopPadding() + 8.dp,
+                        bottom = pad.calculateBottomPadding() + 12.dp,
+                    ),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -297,9 +316,21 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                     }
                 }
             } else {
-                SettingsContent(onRestyle = onRestyle, padding = pad)
+                SettingsContent(
+                    onRestyle = onRestyle,
+                    padding = PaddingValues(
+                        top = pad.calculateTopPadding(),
+                        bottom = pad.calculateBottomPadding(),
+                    ),
+                    onAbout = { about = true },
+                )
             }
         }
+    }
+
+    // The About page is a standalone glass page drawn over the whole shell.
+    if (about) {
+        AboutScreen(onBack = { about = false })
     }
 
     settingsFor?.let { img ->

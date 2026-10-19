@@ -61,8 +61,9 @@ android {
         // 28: гостевые бинарники запускаются из каталога данных приложения (W^X для targetSdk>=29)
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 3
-        versionName = "0.0.0.3"
+        versionCode = 4
+        // 0.1.0 起恢复 semver 标准三段格式（此前是 0.0.0.x 四段）
+        versionName = "0.1.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -169,6 +170,7 @@ dependencies {
     }
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("io.coil-kt:coil-compose:2.7.0") // developer/contributor avatars on the About page
     implementation("org.tukaani:xz:1.10")
     implementation("org.apache.commons:commons-compress:1.28.0")
     implementation("org.brotli:dec:0.1.2")

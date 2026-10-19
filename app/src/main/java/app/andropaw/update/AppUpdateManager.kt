@@ -36,8 +36,9 @@ sealed interface UpdateState {
 }
 
 object AppUpdateManager {
-    private const val RELEASES_API = "https://api.github.com/repos/uxazu/AndroPaw/releases"
-    private const val GITHUB_REPO_URL = "https://github.com/uxazu/AndroPaw"
+    /** 更新源指向 AndroPaw 自己的仓库（TiG-Kira/AndroPaw），tag 规范 v0.0.0.x。 */
+    const val GITHUB_REPO_URL = "https://github.com/TiG-Kira/AndroPaw"
+    private const val RELEASES_API = "https://api.github.com/repos/TiG-Kira/AndroPaw/releases"
 
     /**
      * Запрос к GitHub API для получения информации о последнем релизе с APK-файлом.
@@ -94,6 +95,9 @@ object AppUpdateManager {
     /**
      * Сравнение версий (семантическое сравнение сегментов чисел).
      * Возвращает true, если latestTag новее чем currentVersion.
+     *
+     * 逐段数值比较，段数不敏感：同时兼容旧的 0.0.0.x 四段 tag 和 0.1.0 起的
+     * semver 三段 tag（约定：v0.1.0 发布后版本号固定为三段 semver）。
      */
     fun isNewerVersion(latestTag: String, currentVersion: String): Boolean {
         val cleanLatest = latestTag.trim().removePrefix("v").removePrefix("V")
@@ -133,7 +137,7 @@ object AppUpdateManager {
         // Очищаем старые apk перед новой загрузкой
         updatesDir.listFiles()?.forEach { if (it.extension.equals("apk", ignoreCase = true)) it.delete() }
 
-        val targetFile = File(updatesDir, "aemulator-${release.versionName}.apk")
+        val targetFile = File(updatesDir, "andropaw-${release.versionName}.apk")
 
         var currentUrl = release.downloadUrl
         var conn: HttpURLConnection

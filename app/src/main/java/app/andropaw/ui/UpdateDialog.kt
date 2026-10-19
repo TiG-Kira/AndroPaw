@@ -61,7 +61,7 @@ fun UpdateDialog(
                 onDismissRequest = onDismiss,
             ) {
                 Text(
-                    text = if (rel.sizeBytes > 0) "Размер: ${AppUpdateManager.formatBytes(rel.sizeBytes)}" else "",
+                    text = if (rel.sizeBytes > 0) stringResource(R.string.update_size, AppUpdateManager.formatBytes(rel.sizeBytes)) else "",
                     fontSize = 12.sp,
                 )
                 if (rel.body.isNotBlank()) {
@@ -101,8 +101,8 @@ fun UpdateDialog(
         is UpdateState.ReadyToInstall -> {
             MiuixDialog(
                 show = true,
-                title = "Готово к установке",
-                summary = "Файл обновления (${state.release.tagName}) успешно загружен. Нажмите «Установить», чтобы обновить приложение.",
+                title = stringResource(R.string.update_ready_title),
+                summary = stringResource(R.string.update_ready_msg, state.release.tagName),
                 onDismissRequest = onDismiss,
             ) {
                 DialogButtonRow(listOf(
@@ -115,15 +115,15 @@ fun UpdateDialog(
         is UpdateState.UpToDate -> {
             MiuixDialog(
                 show = true,
-                title = "Обновлений не найдено",
+                title = stringResource(R.string.update_uptodate_title),
                 summary = stringResource(R.string.update_latest, state.currentVersion),
                 onDismissRequest = onDismiss,
             ) {
                 if (state.latestTag.isNotBlank()) {
-                    Text(text = "Последняя версия на GitHub: ${state.latestTag}", fontSize = 12.sp)
+                    Text(text = stringResource(R.string.update_uptodate_github, state.latestTag), fontSize = 12.sp)
                 }
                 DialogButtonRow(listOf(
-                    DialogAction(stringResource(R.string.update_open_github), onClick = { onOpenUrl("https://github.com/uxazu/AndroPaw") }),
+                    DialogAction(stringResource(R.string.update_open_github), onClick = { onOpenUrl(AppUpdateManager.GITHUB_REPO_URL) }),
                     DialogAction(stringResource(R.string.ok), onClick = onDismiss, primary = true),
                 ))
             }
@@ -132,7 +132,7 @@ fun UpdateDialog(
         is UpdateState.Error -> {
             MiuixDialog(
                 show = true,
-                title = "Ошибка",
+                title = stringResource(R.string.update_error_title),
                 summary = stringResource(R.string.update_error, state.message),
                 onDismissRequest = onDismiss,
             ) {

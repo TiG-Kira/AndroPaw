@@ -1,12 +1,6 @@
 package app.andropaw.ui
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
-import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,20 +16,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Language
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Public
-import androidx.compose.material.icons.rounded.Send
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,11 +38,6 @@ import androidx.compose.ui.unit.sp
 import app.andropaw.AppPrefs
 import app.andropaw.BuildConfig
 import app.andropaw.R
-import app.andropaw.update.AppUpdateManager
-import app.andropaw.update.ReleaseInfo
-import app.andropaw.update.UpdateState
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -67,18 +47,9 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** Project links — kept in sync across the app, README and the website. */
-object Links {
-    const val SITE = "https://andropaw.app"
-    const val GITHUB = "https://github.com/uxazu/andropaw"
-    const val CHANNEL = "https://t.me/andropaw"
-    const val AUTHOR = "https://github.com/uxazu"
-    const val ORIGINAL = "https://t.me/istratii_tech1"
-    const val DONATE = "https://dalink.to/uxazu"
-}
-
 /**
- * The Settings tab of the home screen: appearance, defaults, updates, links and support.
+ * The Settings tab of the home screen: appearance and defaults. The updater, project links and
+ * support now live on the About page.
  *
  * Rendered inside the glass shell's [GlassTopAppBar] + [GlassNavigationBar], so it carries no
  * top bar of its own — [padding] is the glass scaffold's content insets.
@@ -87,62 +58,13 @@ object Links {
 fun SettingsContent(
     onRestyle: () -> Unit,
     padding: PaddingValues,
+    onAbout: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var langDialog by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
     var dynamic by remember { mutableStateOf(AppPrefs.dynamicColor(ctx)) }
-    val scope = rememberCoroutineScope()
-    var autoUpdates by remember { mutableStateOf(AppPrefs.autoCheckUpdates(ctx)) }
-    var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
-    var downloadJob by remember { mutableStateOf<Job?>(null) }
-
-    fun checkForUpdates() {
-        updateState = UpdateState.Checking
-        scope.launch {
-            val res = AppUpdateManager.checkLatestRelease()
-            res.fold(
-                onSuccess = { rel ->
-                    if (rel != null) {
-                        if (AppUpdateManager.isNewerVersion(rel.versionName, BuildConfig.VERSION_NAME)) {
-                            updateState = UpdateState.Available(rel)
-                        } else {
-                            updateState = UpdateState.UpToDate(BuildConfig.VERSION_NAME, rel.tagName)
-                        }
-                    } else {
-                        updateState = UpdateState.UpToDate(BuildConfig.VERSION_NAME, "")
-                    }
-                },
-                onFailure = { err ->
-                    updateState = UpdateState.Error(err.localizedMessage ?: "Network error")
-                }
-            )
-        }
-    }
-
-    fun startDownload(rel: ReleaseInfo) {
-        updateState = UpdateState.Downloading(rel, 0f, 0L, rel.sizeBytes)
-        downloadJob = scope.launch {
-            try {
-                val file = AppUpdateManager.downloadApk(ctx, rel) { progress, downloaded, total ->
-                    updateState = UpdateState.Downloading(rel, progress, downloaded, total)
-                }
-                updateState = UpdateState.ReadyToInstall(rel, file)
-                AppUpdateManager.installApk(ctx, file)
-            } catch (e: Exception) {
-                if (e !is kotlinx.coroutines.CancellationException) {
-                    updateState = UpdateState.Error(e.localizedMessage ?: "Download error")
-                }
-            }
-        }
-    }
-
-    fun open(url: String) = runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-    fun copy(text: String) {
-        (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("address", text))
-        Toast.makeText(ctx, ctx.getString(R.string.as_copied), Toast.LENGTH_SHORT).show()
-    }
     val langTag = AppPrefs.language(ctx)
     val langName = AppPrefs.LANGUAGES.firstOrNull { it.first == langTag }?.second?.ifEmpty { null } ?: stringResource(R.string.as_lang_system)
 
@@ -154,27 +76,7 @@ fun SettingsContent(
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item { AboutCard() }
-
-        item {
-            Section(stringResource(R.string.as_updates)) {
-                Toggle(
-                    stringResource(R.string.as_auto_updates),
-                    stringResource(R.string.as_auto_updates_sub),
-                    autoUpdates
-                ) {
-                    autoUpdates = it
-                    AppPrefs.setAutoCheckUpdates(ctx, it)
-                }
-                Row_(
-                    Icons.Rounded.SystemUpdate,
-                    stringResource(R.string.as_check_updates),
-                    stringResource(R.string.as_check_updates_sub, BuildConfig.VERSION_NAME)
-                ) {
-                    checkForUpdates()
-                }
-            }
-        }
+        item { AboutCard(onClick = onAbout) }
 
         item {
             Section(stringResource(R.string.as_appearance)) {
@@ -216,22 +118,6 @@ fun SettingsContent(
                 Toggle(stringResource(R.string.as_led), stringResource(R.string.as_led_sub), defaults.showLed) { set(defaults.copy(showLed = it)) }
             }
         }
-
-        item {
-            Section(stringResource(R.string.as_links)) {
-                Row_(Icons.Rounded.Public, stringResource(R.string.as_site), "andropaw.app") { open(Links.SITE) }
-                Row_(Icons.Rounded.Send, stringResource(R.string.as_channel), "@andropaw") { open(Links.CHANNEL) }
-                Row_(Icons.Rounded.Person, stringResource(R.string.as_author), "uxazu") { open(Links.AUTHOR) }
-                Row_(Icons.Rounded.History, stringResource(R.string.as_orig), "t.me/istratii_tech1") { open(Links.ORIGINAL) }
-                Row_(Icons.Rounded.Code, stringResource(R.string.as_github), "github.com/uxazu/andropaw") { open(Links.GITHUB) }
-            }
-        }
-
-        item {
-            Section(stringResource(R.string.as_support)) {
-                Row_(Icons.Rounded.Favorite, stringResource(R.string.as_donate), "dalink.to/uxazu") { open(Links.DONATE) }
-            }
-        }
     }
 
     if (langDialog) {
@@ -259,23 +145,11 @@ fun SettingsContent(
             ))
         }
     }
-
-    UpdateDialog(
-        state = updateState,
-        onDismiss = { updateState = UpdateState.Idle },
-        onStartDownload = ::startDownload,
-        onCancelDownload = {
-            downloadJob?.cancel()
-            updateState = UpdateState.Idle
-        },
-        onInstall = { file -> AppUpdateManager.installApk(ctx, file) },
-        onOpenUrl = { url -> open(url) }
-    )
 }
 
 @Composable
-private fun AboutCard() {
-    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp)) {
+private fun AboutCard(onClick: () -> Unit = {}) {
+    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp), onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.logo), null, Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)))
             Spacer(Modifier.width(16.dp))
