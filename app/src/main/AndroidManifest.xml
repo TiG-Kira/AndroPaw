@@ -2,6 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- miuix-blur 声明 minSdk 33（AGSL shader）；应用 minSdk 26。
+         不声明 overrideLibrary 的话 manifest merger 直接失败：
+         "uses-sdk:minSdkVersion 26 cannot be smaller than version 33 declared in
+         library [miuix-blur-android]"（Termux-Ultra 同样处理）。 -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
