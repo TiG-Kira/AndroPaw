@@ -116,6 +116,7 @@ import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
@@ -201,7 +202,19 @@ class VmActivity : ComponentActivity() {
         box.addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
         box.addView(guest, FrameLayout.LayoutParams(-1, -1))
         root.addView(box, FrameLayout.LayoutParams(0, 0))
-        val overlay = ComposeView(this).apply { setContent { AndroPawTheme(forceDark = true) { Overlay() } } }
+        // Overlay 里的 OverlayDialog / 下拉菜单依赖 Scaffold 提供的 LocalRootDialogStates 与
+        // MiuixPopupHost：没有 Scaffold 宿主，状态挂进默认空表，窗口永远弹不出来。
+        // containerColor 必须透明——这层 ComposeView 叠在虚拟机画面之上。
+        val overlay = ComposeView(this).apply {
+            setContent {
+                AndroPawTheme(forceDark = true) {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        containerColor = Color.Transparent,
+                    ) { Overlay() }
+                }
+            }
+        }
         root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
 

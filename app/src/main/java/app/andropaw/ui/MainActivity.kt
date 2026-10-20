@@ -324,6 +324,10 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .then(page.contentModifier)
+                // 页面底色放进 layerBackdrop 捕获层内部：底栏玻璃的材质是 SoftLight/HardLight
+                // 混合，需要底下有实像素才能成像。没有 card 的页面捕获层是全透明的，
+                // 混合层无物可混，底板层就渲染不出来。
+                .background(MiuixTheme.colorScheme.surface)
                 .nestedScroll(scrollBehavior.nestedScrollConnection),
         ) {
             if (tab == 0) {
@@ -373,77 +377,80 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 )
             }
         }
-    }
 
-    settingsFor?.let { img ->
-        SettingsSheet(img, onDismiss = { settingsFor = null }, onSave = { s -> model.updateSettings(img, s); settingsFor = null })
-    }
-    resetFor?.let { img ->
-        MiuixDialog(
-            show = true,
-            title = stringResource(R.string.reset_title, img.name),
-            summary = stringResource(R.string.reset_text),
-            onDismissRequest = { resetFor = null },
-        ) {
-            DialogButtonRow(listOf(
-                DialogAction(stringResource(R.string.cancel), onClick = { resetFor = null }),
-                DialogAction(stringResource(R.string.reset_data), onClick = {
-                    resetFor = null
-                    if (model.vmRunning()) android.widget.Toast.makeText(ctx, R.string.reset_running, android.widget.Toast.LENGTH_LONG).show()
-                    else model.resetData(img)
-                }, primary = true, destructive = true),
-            ))
+        // 弹窗 / 底部 sheet 必须在 Scaffold 组合范围内：OverlayDialog / OverlayBottomSheet 走
+        // LocalRootDialogStates 注册到 Scaffold 的 MiuixPopupHost，放在 Scaffold 之外只能拿到
+        // 默认空表，宿主永远看不到这条状态，窗口也就弹不出来。
+        settingsFor?.let { img ->
+            SettingsSheet(img, onDismiss = { settingsFor = null }, onSave = { s -> model.updateSettings(img, s); settingsFor = null })
         }
-    }
-    deleteFor?.let { img ->
-        MiuixDialog(
-            show = true,
-            title = stringResource(R.string.delete_title, img.name),
-            summary = stringResource(R.string.delete_text, Formatter.formatShortFileSize(ctx, img.sizeBytes)),
-            onDismissRequest = { deleteFor = null },
-        ) {
-            DialogButtonRow(listOf(
-                DialogAction(stringResource(R.string.cancel), onClick = { deleteFor = null }),
-                DialogAction(stringResource(R.string.delete), onClick = { model.delete(img); deleteFor = null },
-                    primary = true, destructive = true),
-            ))
+        resetFor?.let { img ->
+            MiuixDialog(
+                show = true,
+                title = stringResource(R.string.reset_title, img.name),
+                summary = stringResource(R.string.reset_text),
+                onDismissRequest = { resetFor = null },
+            ) {
+                DialogButtonRow(listOf(
+                    DialogAction(stringResource(R.string.cancel), onClick = { resetFor = null }),
+                    DialogAction(stringResource(R.string.reset_data), onClick = {
+                        resetFor = null
+                        if (model.vmRunning()) android.widget.Toast.makeText(ctx, R.string.reset_running, android.widget.Toast.LENGTH_LONG).show()
+                        else model.resetData(img)
+                    }, primary = true, destructive = true),
+                ))
+            }
         }
-    }
-    renameFor?.let { img ->
-        var name by remember { mutableStateOf(img.name) }
-        MiuixDialog(
-            show = true,
-            title = stringResource(R.string.name),
-            onDismissRequest = { renameFor = null },
-        ) {
-            TextField(value = name, onValueChange = { name = it }, singleLine = true, label = "")
-            DialogButtonRow(listOf(
-                DialogAction(stringResource(R.string.cancel), onClick = { renameFor = null }),
-                DialogAction(stringResource(R.string.save), onClick = {
-                    model.rename(img, name.trim().ifEmpty { img.name }); renameFor = null
-                }, primary = true),
-            ))
+        deleteFor?.let { img ->
+            MiuixDialog(
+                show = true,
+                title = stringResource(R.string.delete_title, img.name),
+                summary = stringResource(R.string.delete_text, Formatter.formatShortFileSize(ctx, img.sizeBytes)),
+                onDismissRequest = { deleteFor = null },
+            ) {
+                DialogButtonRow(listOf(
+                    DialogAction(stringResource(R.string.cancel), onClick = { deleteFor = null }),
+                    DialogAction(stringResource(R.string.delete), onClick = { model.delete(img); deleteFor = null },
+                        primary = true, destructive = true),
+                ))
+            }
         }
-    }
-    if (help) HelpDialog(onDismiss = { help = false })
-    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
-        onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
-        onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
-        onNewMachine = { library = false; containerFrom = it })
-    containerFrom?.let { src -> ContainerDialog(src, images, onDismiss = { containerFrom = null },
-        onCreate = { from, name, copy, settings -> containerFrom = null; model.clone(from, name, copy, settings) }) }
+        renameFor?.let { img ->
+            var name by remember { mutableStateOf(img.name) }
+            MiuixDialog(
+                show = true,
+                title = stringResource(R.string.name),
+                onDismissRequest = { renameFor = null },
+            ) {
+                TextField(value = name, onValueChange = { name = it }, singleLine = true, label = "")
+                DialogButtonRow(listOf(
+                    DialogAction(stringResource(R.string.cancel), onClick = { renameFor = null }),
+                    DialogAction(stringResource(R.string.save), onClick = {
+                        model.rename(img, name.trim().ifEmpty { img.name }); renameFor = null
+                    }, primary = true),
+                ))
+            }
+        }
+        if (help) HelpDialog(onDismiss = { help = false })
+        if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
+            onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
+            onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
+            onNewMachine = { library = false; containerFrom = it })
+        containerFrom?.let { src -> ContainerDialog(src, images, onDismiss = { containerFrom = null },
+            onCreate = { from, name, copy, settings -> containerFrom = null; model.clone(from, name, copy, settings) }) }
 
-    UpdateDialog(
-        state = updateState,
-        onDismiss = { updateState = UpdateState.Idle },
-        onStartDownload = ::startDownload,
-        onCancelDownload = {
-            downloadJob?.cancel()
-            updateState = UpdateState.Idle
-        },
-        onInstall = { file -> AppUpdateManager.installApk(ctx, file) },
-        onOpenUrl = { url -> runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }
-    )
+        UpdateDialog(
+            state = updateState,
+            onDismiss = { updateState = UpdateState.Idle },
+            onStartDownload = ::startDownload,
+            onCancelDownload = {
+                downloadJob?.cancel()
+                updateState = UpdateState.Idle
+            },
+            onInstall = { file -> AppUpdateManager.installApk(ctx, file) },
+            onOpenUrl = { url -> runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }
+        )
+    }
 }
 
 @Composable

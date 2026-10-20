@@ -215,7 +215,10 @@ private fun TopAppBarLayout(
     val smallTitleVisible by remember(scrollBehavior) {
         derivedStateOf {
             scrollBehavior?.state?.let { state ->
-                state.collapsedFraction * 3f >= 1f
+                // contentOffset < 0 ⇔ 内容已滑到顶栏下方 ⇔ 顶栏已收满。fraction 路径在
+                // heightOffsetLimit 未按大标题高度更新（或被 SmallTopAppBar 钉回 0、fraction 恒为 0）
+                // 时永远跨不过 1/3，收缩后小标题就再不出现；contentOffset 路径兜底。
+                state.collapsedFraction * 3f >= 1f || state.contentOffset < 0f
             } ?: false
         }
     }
