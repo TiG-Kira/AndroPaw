@@ -106,16 +106,19 @@ fun AgentHomeContent(
     padding: PaddingValues,
     modifier: Modifier = Modifier,
     onOpenConversation: (String) -> Unit,
+    onNewChat: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val glassPage = app.andropaw.ui.rememberGlassPageBackdrop()
-    val scrollBehavior = MiuixScrollBehavior()
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     var version by remember { mutableStateOf(0) }
     var runningName by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val l: () -> Unit = { version++ }
+        ChatSession.onChange(l)
+        onDispose { ChatSession.offChange(l) }
+    }
     LaunchedEffect(Unit) {
-        ChatSession.loadAll(ctx)
-        ChatSession.onChange { version++ }
         while (true) {
             val id = VmSession.runningId(ctx)
             runningName = id?.let { app.andropaw.core.ImageStore.get(ctx, it)?.name }
@@ -130,7 +133,7 @@ fun AgentHomeContent(
     ) { _ ->
         Box(Modifier.fillMaxSize().then(glassPage.contentModifier)) {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+                modifier = Modifier.fillMaxSize(),
                 // 留白来自外壳 Scaffold（玻璃顶栏/底栏的让位），与本页内层 Scaffold 无关
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
@@ -148,7 +151,7 @@ fun AgentHomeContent(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                             .background(MiuixTheme.colorScheme.surface)
                             .border(0.5.dp, CardBorder, RoundedCornerShape(16.dp))
-                            .clickable { ChatSession.newConversation(ctx) }
+                            .clickable { ChatSession.startDraft(); onNewChat() }
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -223,8 +226,12 @@ fun AgentChatScreen(
     var showClearConfirm by remember { mutableStateOf(false) }
     var version by remember { mutableStateOf(0) }
 
-    LaunchedEffect(Unit) { ChatSession.onChange { version++ } }
-    val messages = remember(version) { ChatSession.messages.toList() }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val l: () -> Unit = { version++ }
+        ChatSession.onChange(l)
+        onDispose { ChatSession.offChange(l) }
+    }
+    val messages = remember(version) { ChatSession.snapshot() }
     val isLoading = ChatSession.isLoading
     val isStreaming = ChatSession.isStreaming
 
@@ -383,8 +390,12 @@ fun AgentChatOverlay(
     val listState = rememberLazyListState()
     var input by remember { mutableStateOf(TextFieldValue("")) }
     var version by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) { ChatSession.onChange { version++ } }
-    val messages = remember(version) { ChatSession.messages.toList() }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val l: () -> Unit = { version++ }
+        ChatSession.onChange(l)
+        onDispose { ChatSession.offChange(l) }
+    }
+    val messages = remember(version) { ChatSession.snapshot() }
     val isLoading = ChatSession.isLoading
     val isStreaming = ChatSession.isStreaming
 

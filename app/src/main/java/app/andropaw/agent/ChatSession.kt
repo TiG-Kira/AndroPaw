@@ -37,8 +37,9 @@ object ChatSession {
     @Volatile private var cancelled = false
     private var generationJob: Job? = null
 
-    private val listeners = mutableListOf<() -> Unit>()
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
     fun onChange(l: () -> Unit) { listeners.add(l) }
+    fun offChange(l: () -> Unit) { listeners.remove(l) }
     private fun notifyChange() { listeners.forEach { runCatching { it() } } }
 
     // ---- 存储：filesDir/agent-chats/<id>.json（新目录，不与旧 conversations 混用） ----
@@ -68,7 +69,7 @@ object ChatSession {
                     val msgs = c.optJSONArray("messages")?.let { a ->
                         (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let(ChatMessage::from) }
                     } ?: emptyList()
-                    conversations.add(AiConversation(
+                    if (msgs.isNotEmpty()) conversations.add(AiConversation(
                         id = c.optString("id"), title = c.optString("title", "AgentPaw"),
                         messages = msgs, createdAt = c.optLong("createdAt"), updatedAt = c.optLong("updatedAt"),
                     ))
@@ -80,11 +81,16 @@ object ChatSession {
     }
 
     // ---- 会话管理 ----
-    fun newConversation(ctx: Context) {
-        val c = AiConversation(id = "c" + System.currentTimeMillis())
-        conversations.add(0, c)
-        open(ctx, c.id)
-        persist(ctx)
+    fun newConversation(ctx: Context) = startDraft()
+
+    /** 组合线程读取消息必须走这里：直接 toList() 与 IO 线程的写入并发会 ConcurrentModificationException */
+    fun snapshot(): List<ChatMessage> = synchronized(messages) { messages.toList() }
+
+    /** 草稿态：不落盘、不占会话列表，首条消息发出时才真正建会话 */
+    fun startDraft() {
+        activeId = null
+        synchronized(messages) { messages.clear() }
+        notifyChange()
     }
 
     fun open(ctx: Context, id: String) {
@@ -129,7 +135,11 @@ object ChatSession {
         val ctx = appCtx
         val b = bridge ?: return
         if (text.isBlank() || isLoading) return
-        if (activeId == null) newConversation(ctx)
+        if (activeId == null) {
+            val c = AiConversation(id = "c" + System.currentTimeMillis())
+            conversations.add(0, c)
+            activeId = c.id
+        }
 
         cancelled = false
         isLoading = true

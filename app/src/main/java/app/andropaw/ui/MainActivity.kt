@@ -423,6 +423,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         app.andropaw.agent.ChatSession.open(ctx, id)
                         agentChat = true
                     },
+                    onNewChat = { agentChat = true },
                 )
             } else {
                 SettingsContent(
