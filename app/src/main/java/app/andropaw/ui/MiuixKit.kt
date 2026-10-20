@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +32,9 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventDispatcherOwner
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -167,6 +171,26 @@ fun MainNavBarHideEffect(shown: Boolean) {
         if (shown) MainNavBarVisibility.hideRequesters++
         onDispose { if (MainNavBarVisibility.hideRequesters > 0) MainNavBarVisibility.hideRequesters-- }
     }
+}
+
+/**
+ * Supplies the [NavigationEventDispatcherOwner] every miuix popup host needs.
+ *
+ * miuix's dialog / sheet host calls `NavigationBackHandler` unconditionally, and
+ * `NavigationEventHandler` does `checkNotNull(LocalNavigationEventDispatcherOwner.current)` — an
+ * Activity that never provides one crashes the moment a dialog opens
+ * ("No NavigationEventDispatcher was provided via LocalNavigationEventDispatcherOwner").
+ * androidx.activity 1.11 does not publish one through the view tree either, so the owner has to
+ * be provided here explicitly (Termux-Ultra wraps every activity the same way).
+ */
+@Composable
+fun ProvideNavigationEventOwner(content: @Composable () -> Unit) {
+    val owner = remember {
+        object : NavigationEventDispatcherOwner {
+            override val navigationEventDispatcher = NavigationEventDispatcher()
+        }
+    }
+    CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides owner) { content() }
 }
 
 /**

@@ -22,7 +22,7 @@ class AboutActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        setContent { AndroPawTheme { AboutScreen(onBack = { finish() }) } }
+        setContent { ProvideNavigationEventOwner { AndroPawTheme { AboutScreen(onBack = { finish() }) } } }
     }
 
     override fun onResume() {

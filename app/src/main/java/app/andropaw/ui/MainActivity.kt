@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         askPermissions()
         handleView(intent)
-        setContent { AndroPawTheme { Library(model, onRestyle = { recreate() }) } }
+        setContent { ProvideNavigationEventOwner { AndroPawTheme { Library(model, onRestyle = { recreate() }) } } }
     }
 
     override fun onNewIntent(intent: Intent) {

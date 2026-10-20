@@ -207,11 +207,13 @@ class VmActivity : ComponentActivity() {
         // containerColor 必须透明——这层 ComposeView 叠在虚拟机画面之上。
         val overlay = ComposeView(this).apply {
             setContent {
-                AndroPawTheme(forceDark = true) {
-                    Scaffold(
-                        modifier = Modifier.fillMaxSize(),
-                        containerColor = Color.Transparent,
-                    ) { Overlay() }
+                ProvideNavigationEventOwner {
+                    AndroPawTheme(forceDark = true) {
+                        Scaffold(
+                            modifier = Modifier.fillMaxSize(),
+                            containerColor = Color.Transparent,
+                        ) { Overlay() }
+                    }
                 }
             }
         }
