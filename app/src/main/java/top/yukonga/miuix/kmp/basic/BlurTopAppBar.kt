@@ -211,14 +211,19 @@ private fun TopAppBarLayout(
         }
     }
 
+    // 布局阶段算出的收缩比例：与 barHeight 同一次测量、同一个 |heightOffset| / expansion。
+    // state.collapsedFraction 走的是 heightOffsetLimit（onSizeChanged 写入的普通变量，
+    // 不在快照内、可与实际 expansion 脱节），顶栏明明已收满却跨不过 1/3 时小标题就永不出现。
+    // 小标题的出现必须以"眼睛看到的收缩"为准。
+    val layoutCollapseFraction = remember { mutableFloatStateOf(0f) }
+
     // Boolean derivedStateOf invalidates only on flip → the spring fires once per crossing, not per frame.
     val smallTitleVisible by remember(scrollBehavior) {
         derivedStateOf {
             scrollBehavior?.state?.let { state ->
-                // contentOffset < 0 ⇔ 内容已滑到顶栏下方 ⇔ 顶栏已收满。fraction 路径在
-                // heightOffsetLimit 未按大标题高度更新（或被 SmallTopAppBar 钉回 0、fraction 恒为 0）
-                // 时永远跨不过 1/3，收缩后小标题就再不出现；contentOffset 路径兜底。
-                state.collapsedFraction * 3f >= 1f || state.contentOffset < 0f
+                // layoutCollapseFraction 由下面的 measure 写入；contentOffset < 0 兜底
+                // （内容已滑到顶栏下方，说明顶栏已在收缩路径上）。
+                layoutCollapseFraction.floatValue * 3f >= 1f || state.contentOffset < 0f
             } ?: false
         }
     }
@@ -426,13 +431,15 @@ private fun TopAppBarLayout(
         val collapsedHeight = TopAppBarDefaults.CollapsedHeight.roundToPx()
         // largeTitle Box has top padding = collapsedHeight, so subtract it back for the pure expansion.
         val expansion = (largeTitlePlaceable.height - collapsedHeight).coerceAtLeast(0)
+        // 与 barHeight 同源的收缩比例：先算比例再用它求高度；写回 layoutCollapseFraction 的时机
+        // 放在下面的 placement 块（与 onSizeChanged 同阶段），让小标题可见性与实际收缩完全一致。
+        val offset = scrolledOffset()
+        val collapseFraction = if (expansion > 0 && !offset.isNaN()) {
+            (abs(offset) / expansion.toFloat()).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
         val barHeight = if (expansion > 0) {
-            val offset = scrolledOffset()
-            val collapseFraction = if (offset.isNaN()) {
-                0f
-            } else {
-                (abs(offset) / expansion.toFloat()).coerceIn(0f, 1f)
-            }
             lerp(
                 start = collapsedHeight,
                 stop = collapsedHeight + expansion,
@@ -454,6 +461,11 @@ private fun TopAppBarLayout(
         val layoutHeight = contentTop + bottomContentPlaceable.height
 
         layout(constraints.maxWidth, layoutHeight) {
+            // placement 阶段回写收缩比例（与 onSizeChanged 同阶段）；值不变时不写，收敛即停。
+            if (layoutCollapseFraction.floatValue != collapseFraction) {
+                layoutCollapseFraction.floatValue = collapseFraction
+            }
+
             // Navigation icon
             navigationIconPlaceable.placeRelative(
                 x = 0,
