@@ -425,7 +425,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             ))
         }
     }
-    if (help) HelpDialog(onDismiss = { help = false })    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
+    if (help) HelpDialog(onDismiss = { help = false })
+    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
         onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
         onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
         onNewMachine = { library = false; containerFrom = it })
