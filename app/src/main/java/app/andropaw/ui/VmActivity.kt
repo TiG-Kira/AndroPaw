@@ -30,6 +30,9 @@ import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
@@ -123,6 +126,8 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
+import top.yukonga.miuix.kmp.glass.GlassPopupItem
 
 /** Процесс :vm держит ровно одну машину. */
 object VmHost {
@@ -677,7 +682,18 @@ class VmActivity : ComponentActivity() {
         LaunchedEffect(Unit) { while (true) { if (vm.recoveryMode) guest.format = vm.recoveryFormat else if (vm.engine == app.andropaw.core.Engine.N64) guest.format = 1; seconds = vm.bootSeconds(); frames = if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings; delay(500) } }
         // как только гость начал рисовать — карточку убираем, остаётся маленький индикатор
         val drawing = frames > 30
-        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        // The "more" menu: the button and the panel it drops are hosted apart. GlassDropdownPopup lays
+        // itself out on the box it is composed in, so hosting it inside the 40 dp button made that
+        // button the whole page — the panel had nowhere to grow and stayed a small circle. The panel
+        // is therefore hosted on the page below (Termux-Ultra's rule: the popup lives on the root box).
+        var menuOpen by remember { mutableStateOf(false) }
+        // the button, in root coordinates
+        var menuIcon by remember { mutableStateOf(Rect.Zero) }
+        // the page's origin, in root coordinates — the anchor is handed to the panel relative to it
+        var menuPageOrigin by remember { mutableStateOf(Offset.Zero) }
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
+        ) {
             // the menu button stays on screen: 40 dp button + 8 dp padding, anchored at the top end
             val keep = with(androidx.compose.ui.platform.LocalDensity.current) { 56.dp.toPx() }
             val maxX = (constraints.maxWidth - keep).coerceAtLeast(0f)
@@ -712,67 +728,74 @@ class VmActivity : ComponentActivity() {
                 TerminalPanel(onClose = { showTerm = false })
             }
 
+            // the menu's entries — hoisted: the button and the panel are hosted apart, and the panel
+            // is laid out on this box (the page), see at the end of it
+            val menuItems = buildList {
+                add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
+                add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
+                // the machine keeps running behind its notification
+                add(GlassMenuItem(stringResource(R.string.m_minimize), Icons.Rounded.Close) { moveTaskToBack(true) })
+                add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { vm.input.press(InputService.KEY_VOLUMEUP) })
+                add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { vm.input.press(InputService.KEY_VOLUMEDOWN) })
+                add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER) })
+                add(GlassMenuItem(stringResource(R.string.m_power_menu), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER, 1500) })
+                // long-press Menu makes 2.x–4.x call InputMethodManager.toggleSoftInput: the firmware's own keyboard
+                if (!vm.recoveryMode) {
+                    add(GlassMenuItem(stringResource(R.string.m_keyboard), Icons.Rounded.Keyboard, enabled = running) {
+                        // 5.0+ hides the soft keyboard while it sees hardware keys and has no long-Menu toggle
+                        if (vm.img.api >= 21) guestAsync("settings put secure show_ime_with_hard_keyboard 1")
+                        else vm.input.press(InputService.KEY_MENU, 1000)
+                    })
+                    add(GlassMenuItem(stringResource(R.string.m_paste), Icons.Rounded.ContentPaste, enabled = running) { pasteToGuest() })
+                    add(GlassMenuItem(stringResource(R.string.m_sms), Icons.Rounded.Sms, enabled = running) { dialog = Dlg.SMS })
+                    add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
+                    add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
+                    add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
+                        pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
+                    })
+                    add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
+                    add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })
+                    add(GlassMenuItem(stringResource(R.string.m_settings), Icons.Rounded.Settings, enabled = running) {
+                        guestAsync("am start -a android.settings.SETTINGS")
+                    })
+                }
+                add(GlassMenuItem(stringResource(R.string.m_screenshot), Icons.Rounded.Screenshot, enabled = state == GuestVm.State.RUNNING) { screenshot() })
+                add(GlassMenuItem(
+                    stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record),
+                    Icons.Rounded.Videocam,
+                    enabled = state == GuestVm.State.RUNNING || recOn.value,
+                ) { toggleRecording() })
+                add(GlassMenuItem(
+                    stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc),
+                    Icons.Rounded.Cast,
+                ) { toggleVnc() })
+                add(GlassMenuItem(stringResource(R.string.m_reset_menu_pos), Icons.Rounded.RestartAlt) {
+                    menuOffset = Offset.Zero; saveMenuOffset()
+                })
+                add(GlassMenuItem(stringResource(R.string.m_reboot), Icons.Rounded.RestartAlt) { rebootVm() })
+                add(GlassMenuItem(
+                    stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
+                    Icons.Rounded.RestartAlt,
+                    enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
+                ) { rebootVm(!vm.recoveryMode) })
+                add(GlassMenuItem(stringResource(R.string.shutdown), Icons.Rounded.Close) { stopVm() })
+            }
+
             // top menu button (hidden while the log is open so it does not cover the log toolbar); drag to move it
             if (!showLog && !showTerm) Box(Modifier.align(Alignment.TopEnd).displayCutoutPadding().statusBarsPadding().padding(8.dp)
                 .offset { IntOffset(menuOffset.x.roundToInt(), menuOffset.y.roundToInt()) }
                 .pointerInput(Unit) {
                     detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset = clamp(menuOffset + d) }
                 }) {
-                GlassMenuButton(
-                    icon = Icons.Rounded.MoreVert,
-                    contentDescription = stringResource(R.string.menu),
-                    modifier = Modifier.size(40.dp),
-                    items = buildList {
-                        add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
-                        add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
-                        // the machine keeps running behind its notification
-                        add(GlassMenuItem(stringResource(R.string.m_minimize), Icons.Rounded.Close) { moveTaskToBack(true) })
-                        add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { vm.input.press(InputService.KEY_VOLUMEUP) })
-                        add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { vm.input.press(InputService.KEY_VOLUMEDOWN) })
-                        add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER) })
-                        add(GlassMenuItem(stringResource(R.string.m_power_menu), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER, 1500) })
-                        // long-press Menu makes 2.x–4.x call InputMethodManager.toggleSoftInput: the firmware's own keyboard
-                        if (!vm.recoveryMode) {
-                            add(GlassMenuItem(stringResource(R.string.m_keyboard), Icons.Rounded.Keyboard, enabled = running) {
-                                // 5.0+ hides the soft keyboard while it sees hardware keys and has no long-Menu toggle
-                                if (vm.img.api >= 21) guestAsync("settings put secure show_ime_with_hard_keyboard 1")
-                                else vm.input.press(InputService.KEY_MENU, 1000)
-                            })
-                            add(GlassMenuItem(stringResource(R.string.m_paste), Icons.Rounded.ContentPaste, enabled = running) { pasteToGuest() })
-                            add(GlassMenuItem(stringResource(R.string.m_sms), Icons.Rounded.Sms, enabled = running) { dialog = Dlg.SMS })
-                            add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
-                            add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
-                            add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
-                                pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
-                            })
-                            add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
-                            add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })
-                            add(GlassMenuItem(stringResource(R.string.m_settings), Icons.Rounded.Settings, enabled = running) {
-                                guestAsync("am start -a android.settings.SETTINGS")
-                            })
-                        }
-                        add(GlassMenuItem(stringResource(R.string.m_screenshot), Icons.Rounded.Screenshot, enabled = state == GuestVm.State.RUNNING) { screenshot() })
-                        add(GlassMenuItem(
-                            stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record),
-                            Icons.Rounded.Videocam,
-                            enabled = state == GuestVm.State.RUNNING || recOn.value,
-                        ) { toggleRecording() })
-                        add(GlassMenuItem(
-                            stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc),
-                            Icons.Rounded.Cast,
-                        ) { toggleVnc() })
-                        add(GlassMenuItem(stringResource(R.string.m_reset_menu_pos), Icons.Rounded.RestartAlt) {
-                            menuOffset = Offset.Zero; saveMenuOffset()
-                        })
-                        add(GlassMenuItem(stringResource(R.string.m_reboot), Icons.Rounded.RestartAlt) { rebootVm() })
-                        add(GlassMenuItem(
-                            stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
-                            Icons.Rounded.RestartAlt,
-                            enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
-                        ) { rebootVm(!vm.recoveryMode) })
-                        add(GlassMenuItem(stringResource(R.string.shutdown), Icons.Rounded.Close) { stopVm() })
-                    },
-                )
+                // the button half of the old GlassMenuButton: the panel is not in here — this box is
+                // only 40 dp, and that used to be the whole page the menu laid itself out on
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape).clickable { menuOpen = true }
+                        .onGloballyPositioned { menuIcon = it.boundsInRoot() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.MoreVert, stringResource(R.string.menu), tint = MiuixTheme.colorScheme.onSurface)
+                }
             }
 
             when (dialog) {
@@ -787,6 +810,25 @@ class VmActivity : ComponentActivity() {
             // панель кнопок Android
             if (vm.settings.showNavBar && !showLog && !showTerm) {
                 NavBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp))
+            }
+
+            // the panel itself, hosted on the page (this box): it gets the whole overlay as its page,
+            // so it can take its real size and clamp to the screen, and the button above stays put —
+            // its bounds are recorded in root coordinates, the panel speaks this box's own
+            GlassDropdownPopup(
+                show = menuOpen,
+                onDismissRequest = { menuOpen = false },
+                anchorBounds = menuIcon.translate(-menuPageOrigin.x, -menuPageOrigin.y),
+                backdrop = null,
+            ) {
+                menuItems.forEach { item ->
+                    GlassPopupItem(
+                        text = item.text,
+                        icon = item.icon,
+                        enabled = item.enabled,
+                        onClick = { menuOpen = false; item.onClick() },
+                    )
+                }
             }
         }
     }
