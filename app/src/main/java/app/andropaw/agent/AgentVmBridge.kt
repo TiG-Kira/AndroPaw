@@ -58,6 +58,12 @@ class AgentVmBridge(
 
     fun targetName(): String? = image()?.name
 
+    /** 目标机器的 guest 分辨率（归一化坐标换算用） */
+    suspend fun guestSize(): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val img = image() ?: return@withContext (1080 to 1920)
+        img.settings.width to img.settings.height
+    }
+
     fun isMachineRunning(): Boolean = VmSession.runningId(ctx) != null
 
     // ------------------------------------------------------------------ guest shell

@@ -359,8 +359,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 0 -> HomeFab(expanded = addMenu, onToggle = { addMenu = it },
                     onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
                 1 -> app.andropaw.agent.AgentNewChatFab(onNewChat = {
-                    val c = app.andropaw.agent.AgentStore.newConversation(ctx)
-                    app.andropaw.agent.AgentChatSession.open(ctx, c)
+                    app.andropaw.agent.ChatSession.newConversation(ctx)
                     agentChat = true
                 })
             }
@@ -422,8 +421,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                     ),
                     // the top bar follows this page's own scrolling (see AgentHomeContent)
                     modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-                    onOpenConversation = { conv ->
-                        app.andropaw.agent.AgentChatSession.open(ctx, conv)
+                    onOpenConversation = { id ->
+                        app.andropaw.agent.ChatSession.open(ctx, id)
                         agentChat = true
                     },
                 )

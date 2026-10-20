@@ -770,6 +770,7 @@ class VmActivity : ComponentActivity() {
                 inlineShell = { cmd, t -> vm.guestRunner.run(listOf("/system/bin/sh", "-c", vm.shellPrefix + cmd), t) }
             }
         }
+        LaunchedEffect(Unit) { app.andropaw.agent.ChatSession.attach(applicationContext, agentBridge) }
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
         ) {
