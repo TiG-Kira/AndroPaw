@@ -6,6 +6,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.LinkedBlockingQueue
 
 /**
  * Сенсорный экран и кнопки гостя. qemu при открытии гостем /dev/input/event0 подключается к
@@ -16,7 +17,31 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
 
     data class P(val id: Int, val x: Int, val y: Int)
 
-    private class Client(val out: OutputStream, val pid: Int)
+    private class Client(val out: OutputStream, val pid: Int) {
+        private val q: LinkedBlockingQueue<ByteArray> = LinkedBlockingQueue(256)
+        @Volatile var closed = false
+            private set
+        private val thread: Thread
+
+        init {
+            thread = Thread({
+                while (true) {
+                    val data = try { q.take() } catch (_: InterruptedException) { break }
+                    if (data.isEmpty()) break
+                    try { out.write(data); out.flush() } catch (_: Exception) { break }
+                }
+                closed = true
+            }, "input-out-$pid").apply { isDaemon = true; start() }
+        }
+
+        /** Queue one packet; false when this client cannot keep up and has to be dropped. */
+        fun send(b: ByteArray): Boolean {
+            if (closed) return false
+            return q.offer(b)
+        }
+
+        fun shutdown() { closed = true; q.clear(); q.offer(ByteArray(0)) }
+    }
 
     private val clients = CopyOnWriteArrayList<Client>()
     @Volatile var rateHz = 60
@@ -57,7 +82,7 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
 
     fun stop() {
         server.stop()
-        clients.forEach { runCatching { it.out.close() } }
+        clients.forEach { runCatching { it.shutdown() }; runCatching { it.out.close() } }
         clients.clear()
     }
 
@@ -217,10 +242,16 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
             val src = ByteBuffer.wrap(a).order(ByteOrder.LITTLE_ENDIAN); val dst = ByteBuffer.wrap(o).order(ByteOrder.LITTLE_ENDIAN)
             repeat(a.size / EV) { dst.putLong(src.int.toLong()); dst.putLong(src.int.toLong()); dst.putShort(src.short); dst.putShort(src.short); dst.putInt(src.int) }
         }
+        // Each client has its own writer thread with a bounded queue: a guest process that stopped
+        // reading (a stuck one, a dead one) is dropped instead of blocking the input of all the rest
         for (c in clients) {
-            try { c.out.write(w); c.out.flush() } catch (e: Exception) { dead.add(c) }
+            if (!c.send(w)) dead.add(c)
         }
-        if (dead.isNotEmpty()) clients.removeAll(dead.toSet())
+        if (dead.isNotEmpty()) {
+            clients.removeAll(dead.toSet())
+            dead.forEach { runCatching { it.shutdown() }; runCatching { it.out.close() } }
+            if (dead.isNotEmpty()) log("input: dropped ${dead.size} stalled client(s)")
+        }
         sent += a.size / EV
     }
 

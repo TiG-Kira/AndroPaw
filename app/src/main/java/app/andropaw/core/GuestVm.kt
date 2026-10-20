@@ -89,7 +89,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun lines(): List<String> = lines.toList()
     fun onLog(l: (String) -> Unit) { listeners.add(l) }
     fun onState(l: (State) -> Unit) { stateListeners.add(l) }
-    private fun setState(s: State) { state = s; stateListeners.forEach { runCatching { it(s) } } }
+    private fun setState(s: State) {
+        state = s
+        // the home page follows the machine through this marker (the VM lives in its own process)
+        if (s == State.STOPPED) VmSession.clear(ctx)
+        else runCatching { VmSession.publish(ctx, img.id, s.name) }
+        stateListeners.forEach { runCatching { it(s) } }
+    }
 
     val props = PropService(paths, ::log)
     /** ADB over the LAN, switched on from the VM menu */
@@ -641,42 +647,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun glUp() {
         if (!settings.gpu) { log("GPU bridge off, software rendering"); return }
         val (w, h) = if (engine == Engine.GB) 480 to 800 else settings.width to settings.height
-        paths.glSock.parentFile?.mkdirs()
-        paths.glSock.delete()
-        when (engine) {
-            Engine.N64 -> {
-                log("native arm64: graphics are served by the engine's own HALs")
-                // ...except for 32-bit programs, which draw through the 4.4 engine's GPU bridge (its frame file is not shown)
-                if (kernel.gpuBridge32 != null && n64Has32) {
-                    spawn("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
-                        "-s", paths.glSock.absolutePath, "-fb", File(paths.bin, "gl32.fb").absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
-                    waitFor("GL bridge socket", 10_000) { paths.glSock.exists() }
-                }
+        if (engine == Engine.KK) {
+            if (surface == null) waitFor("screen surface", 10_000) { surface != null }
+            val sf = surface
+            HostNative.relaxFdsanSafe()
+            // 5.0+: hwui's GL stream has crashed the in-app bridge (SIGSEGV in serve_one_raw took the whole app down);
+            // the standalone glserverd keeps such a crash inside its own process
+            if (img.api < 21 && sf != null && GlBridge.start(sf, paths.glSock.absolutePath, paths.log("glbridge").absolutePath, w, h, false)) {
+                log("★ GPU bridge running in-app: frames render straight to the surface")
+                waitFor("GL bridge socket", 5_000) { paths.glSock.exists() }
+                return
             }
-            Engine.GB -> {
-                Slot.start(ctx, GlSlot::class.java,
-                    listOf("glserverd", "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath, "-w", "$w", "-h", "$h"),
-                    emptyMap(), paths.log("glserverd"))
-                waitFor("GL bridge socket", 10_000) { paths.glSock.exists() }
-            }
-            Engine.KK -> {
-                if (surface == null) waitFor("screen surface", 10_000) { surface != null }
-                val sf = surface
-                HostNative.relaxFdsanSafe()
-                // 5.0+: hwui's GL stream has crashed the in-app bridge (SIGSEGV in serve_one_raw took the whole app down);
-                // the standalone glserverd keeps such a crash inside its own process
-                if (img.api < 21 && sf != null && GlBridge.start(sf, paths.glSock.absolutePath, paths.log("glbridge").absolutePath, w, h, false)) {
-                    log("★ GPU bridge running in-app: frames render straight to the surface")
-                    waitFor("GL bridge socket", 5_000) { paths.glSock.exists() }
-                    return
-                }
-                log(if (img.api >= 21) "GPU bridge: standalone glserverd" else "in-app GPU bridge failed, falling back to standalone glserverd")
-                spawn("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
-                    "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath,
-                    "-notify", paths.frameSock.absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
-                waitFor("GL bridge socket", 10_000) { paths.glSock.exists() }
-            }
+            log(if (img.api >= 21) "GPU bridge: standalone glserverd" else "in-app GPU bridge failed, falling back to standalone glserverd")
+        } else if (engine == Engine.N64) {
+            log("native arm64: graphics are served by the engine's own HALs")
         }
+        spawnGl()
     }
 
     /** the 4.4 engine's GL server reads every GL call of a client with its own system calls; native/glbuf reads the
@@ -1047,6 +1033,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 Thread.sleep(3000)
                 if (power.length() > 0) { val v = runCatching { power.readText().trim() }.getOrDefault("reboot"); power.writeText(""); powerRequest(v) }
                 if (img.api >= 14) runCatching { dns.ensure() }
+                superviseFreeze()
                 val dead = synchronized(procs) { procs.filter { !it.value.isAlive }.keys.toList() }
                 for (name in dead) {
                     if (stopping) break
@@ -1109,6 +1096,123 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }, "vm-watchdog").apply { isDaemon = true; start() }
     }
 
+    // ------------------------------------------------------------------ заморозка гостя
+
+    /**
+     * Надзор за «заморозкой»: гость весь жив (ни один процесс не умер), но не двигается —
+     /// ни свойства не пишутся, ни кадры не идут. Так выглядит мёртвая блокировка в нативной
+     * службе-помощнике (:binder / :gl движка GB, binderd/glserverd native): гостевой поток
+     * навсегда встал в syscall, который никто не ответит, и лечится это только перезапуском
+     * машины. Здесь такое состояние обнаруживается и развязывается само, по ступеням:
+     *   1. перезапуск помощников (мёртвая блокировка в них рассыпается, гости получают EOF и
+     *      переподключаются к новым сокетам),
+     *   2. перезапуск системы гостя (убийство зиготы — отработанный путь восстановления),
+     *   3. полная перезагрузка машины.
+     * Порог: прогресса нет [FREEZE_QUIET_MS], но что-то было недавно (ввод или прогресс) —
+     * простое бездействие (спящий экран, статичный интерфейс) не считается заморозкой.
+     * Выключается файлом run/freeze.guard.off (отладка).
+     */
+    private class FreezeWatch {
+        var lastProgress = -1L
+        var lastInput = -1L
+        var lastProgressAt = 0L
+        var lastInputAt = 0L
+        var since = 0L
+        var stage = 0
+        var firedAt = 0L
+        fun reset() { since = 0L; stage = 0 }
+    }
+
+    private val freeze = FreezeWatch()
+
+    private fun superviseFreeze() {
+        if (stopping || recoveryMode) { freeze.reset(); return }
+        if (state != State.RUNNING || screenUpAt == 0L) { freeze.reset(); return }
+        if (File(paths.bin, "freeze.guard.off").isFile) return
+        val now = System.currentTimeMillis()
+        val progress = props.writes + frames.rings
+        if (progress != freeze.lastProgress) {
+            freeze.lastProgress = progress; freeze.lastProgressAt = now; freeze.reset(); return
+        }
+        if (input.sent != freeze.lastInput) { freeze.lastInput = input.sent; freeze.lastInputAt = now }
+        // что-то происходило недавно — иначе это просто покоящаяся машина, а не заморозка
+        if (now - maxOf(freeze.lastProgressAt, freeze.lastInputAt) > 30_000) { freeze.since = 0L; return }
+        if (freeze.since == 0L) freeze.since = now
+        val quiet = now - freeze.since
+        if (quiet < FREEZE_QUIET_MS) return
+        if (now - freeze.firedAt < FREEZE_STAGE_GAP_MS) return
+        when (freeze.stage) {
+            0 -> {
+                freeze.stage = 1; freeze.firedAt = now
+                log("⚠ guest looks frozen: no progress for ${quiet / 1000}s " +
+                    "(props ${props.writes}, frames ${frames.rings}, input ${input.sent}, alive ${alive().joinToString()}); recycling helpers")
+                recycleHelpers()
+            }
+            1 -> {
+                freeze.stage = 2; freeze.firedAt = now
+                log("⚠ still frozen after the helpers were recycled; restarting the guest system")
+                synchronized(procs) { procs["zygote"] }?.let { z -> pidOf(z)?.let { runCatching { AProcess.sendSignal(it, 9) } } }
+            }
+            else -> {
+                freeze.stage = 3; freeze.firedAt = now
+                log("⚠ still frozen; rebooting the VM (was recoverable only by a restart before)")
+                onPower?.invoke(true, "")
+            }
+        }
+    }
+
+    /** Kill the helper processes the guest's binder and GL ride on, then bind fresh ones. */
+    private fun recycleHelpers() {
+        val names = listOf(ctx.packageName + ":binder", ctx.packageName + ":gl")
+        var killed = 0
+        File("/proc").listFiles()?.forEach { d ->
+            val pid = d.name.toIntOrNull() ?: return@forEach
+            if (pid == AProcess.myPid()) return@forEach
+            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
+            if (names.any { cmd.startsWith(it) }) { runCatching { AProcess.sendSignal(pid, 9) }; killed++ }
+        }
+        // помощники этого процесса (native-движки): binderd/hwbinder/vndbinder/glserverd
+        synchronized(procs) {
+            procs.keys.filter { it == "binderd" || it == "hwbinderd" || it == "vndbinderd" || it == "glserverd" }.toList()
+        }.forEach { n -> synchronized(procs) { procs.remove(n) }?.let { runCatching { it.destroyForcibly() }; killed++ } }
+        log("freeze: recycled $killed helper process(es)")
+        runCatching { startBinder() }
+        runCatching { spawnGl() }
+    }
+
+    /** the GL bridge spawn of [glUp], kept apart so [recycleHelpers] can repeat it verbatim */
+    private fun spawnGl() {
+        if (!settings.gpu) return
+        val (w, h) = if (engine == Engine.GB) 480 to 800 else settings.width to settings.height
+        paths.glSock.parentFile?.mkdirs()
+        paths.glSock.delete()
+        when (engine) {
+            Engine.N64 -> {
+                if (kernel.gpuBridge32 != null && n64Has32) {
+                    spawn("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
+                        "-s", paths.glSock.absolutePath, "-fb", File(paths.bin, "gl32.fb").absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
+                }
+            }
+            Engine.GB -> {
+                Slot.start(ctx, GlSlot::class.java,
+                    listOf("glserverd", "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath, "-w", "$w", "-h", "$h"),
+                    emptyMap(), paths.log("glserverd"))
+            }
+            Engine.KK -> {
+                spawn("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
+                    "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath,
+                    "-notify", paths.frameSock.absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
+            }
+        }
+        waitFor("GL bridge socket", 10_000) { paths.glSock.exists() }
+    }
+
+    companion object {
+        /** no guest progress for this long while something happened recently: a freeze */
+        private const val FREEZE_QUIET_MS = 90_000L
+        /** between the recovery stages */
+        private const val FREEZE_STAGE_GAP_MS = 45_000L
+    }
     /**
      * Ставит политику AOSP 4.3 за обёрткой: родная сохраняется, лишние потоки производителя
      * (Samsung: 0..14 против 0..9 в AOSP) обёртка сводит к MUSIC, чтобы AOSP-код не писал за массив.

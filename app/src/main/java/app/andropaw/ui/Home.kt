@@ -85,6 +85,7 @@ fun MachineCard(
     img: GuestImage,
     baseName: String?,
     modifier: Modifier = Modifier,
+    running: Boolean = false,
     onStart: () -> Unit,
     onSettings: () -> Unit,
     onRename: () -> Unit,
@@ -106,6 +107,20 @@ fun MachineCard(
             Text(img.skin, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White.copy(alpha = 0.9f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 14.dp, end = 48.dp))
+            // the machine runs in the :vm process right now: tap the card to return to its screen
+            if (running) {
+                Row(
+                    Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 40.dp)
+                        .clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.92f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF34C08E)))
+                    Spacer(Modifier.width(5.dp))
+                    Text(stringResource(R.string.vm_running_badge), fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0B6E66))
+                }
+            }
             Box(Modifier.align(Alignment.TopEnd)) {
                 GlassMenuButton(
                     icon = Icons.Rounded.MoreVert,

@@ -733,8 +733,14 @@ class VmActivity : ComponentActivity() {
             val menuItems = buildList {
                 add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
                 add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
-                // the machine keeps running behind its notification
-                add(GlassMenuItem(stringResource(R.string.m_minimize), Icons.Rounded.Close) { moveTaskToBack(true) })
+                // back to the app's home page: the machine keeps running in the :vm process
+                // (Keeper keeps it alive) and the home page shows it as running
+                add(GlassMenuItem(stringResource(R.string.m_back_home), Icons.Rounded.Close) {
+                    runCatching {
+                        startActivity(Intent(this@VmActivity, app.andropaw.ui.MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+                    }
+                })
                 add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { vm.input.press(InputService.KEY_VOLUMEUP) })
                 add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { vm.input.press(InputService.KEY_VOLUMEDOWN) })
                 add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER) })
@@ -787,7 +793,7 @@ class VmActivity : ComponentActivity() {
                 .pointerInput(Unit) {
                     detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset = clamp(menuOffset + d) }
                 }) {
-                // the button half of the old GlassMenuButton: the panel is not in here — this box is
+                // the button half of the old GlassMenuButton: the panel is not in here - this box is
                 // only 40 dp, and that used to be the whole page the menu laid itself out on
                 Box(
                     Modifier.size(40.dp).clip(CircleShape).clickable { menuOpen = true }

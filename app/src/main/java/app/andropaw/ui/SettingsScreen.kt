@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -63,6 +64,7 @@ fun SettingsContent(
 ) {
     val ctx = LocalContext.current
     var langDialog by remember { mutableStateOf(false) }
+    var agentSettings by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
     var dynamic by remember { mutableStateOf(AppPrefs.dynamicColor(ctx)) }
@@ -78,6 +80,13 @@ fun SettingsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item { AboutCard(onClick = onAbout) }
+
+        item {
+            Section(stringResource(R.string.agent_settings_group)) {
+                Row_(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_llm_row),
+                    stringResource(R.string.agent_settings_sub)) { agentSettings = true }
+            }
+        }
 
         item {
             Section(stringResource(R.string.as_appearance)) {
@@ -146,6 +155,10 @@ fun SettingsContent(
                 DialogAction(stringResource(R.string.cancel), onClick = { langDialog = false }),
             ))
         }
+    }
+
+    if (agentSettings) {
+        app.andropaw.agent.AgentSettingsDialog(onDismiss = { agentSettings = false })
     }
 }
 

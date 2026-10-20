@@ -46,6 +46,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Android
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -189,9 +190,23 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     var addMenu by remember { mutableStateOf(false) }
     var library by remember { mutableStateOf(false) }
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
-    /** 0 = emulator page, 1 = settings page. */
+    /** 0 = emulator page, 1 = AgentPaw page, 2 = settings page. */
     var tab by remember { mutableStateOf(0) }
+    /** The AgentPaw chat page, drawn over the shell. */
+    var agentChat by remember { mutableStateOf(false) }
     val page = rememberGlassPageBackdrop()
+    /** the AgentPaw execution channel: guest commands ride the QEMU path, no host-device control */
+    val agentBridge = remember { app.andropaw.agent.AgentVmBridge(ctx.applicationContext, model) }
+
+    // the machine the :vm process keeps running in the background (null: none), polled while the
+    // home page is on screen — the card of that machine shows "running" and resumes it on tap
+    var runningId by remember { mutableStateOf(app.andropaw.core.VmSession.runningId(ctx)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            runningId = app.andropaw.core.VmSession.runningId(ctx)
+            kotlinx.coroutines.delay(1000)
+        }
+    }
 
     // Termux-Ultra floating glass nav-bar placement: the bar is inset 24 dp on both sides and
     // sits on top of the system navigation bars, floored at 12 dp (gesture bars keep their own
@@ -262,7 +277,11 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             GlassTopAppBar(
-                title = if (tab == 0) stringResource(R.string.tab_emulator) else stringResource(R.string.settings),
+                title = when (tab) {
+                    0 -> stringResource(R.string.tab_emulator)
+                    1 -> stringResource(R.string.tab_agent)
+                    else -> stringResource(R.string.settings)
+                },
                 backdrop = page.backdrop,
                 scrollBehavior = scrollBehavior,
                 actions = {
@@ -283,6 +302,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 GlassNavigationBar(
                     items = listOf(
                         GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                        GlassNavigationItem(Icons.Rounded.AutoAwesome, stringResource(R.string.tab_agent)),
                         GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
                     ),
                     selectedIndex = tab,
@@ -302,18 +322,29 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         onClick = { tab = 0 },
                     )
                     NavigationBarItem(
-                        icon = Icons.Rounded.Settings,
-                        label = stringResource(R.string.settings),
+                        icon = Icons.Rounded.AutoAwesome,
+                        label = stringResource(R.string.tab_agent),
                         selected = tab == 1,
                         onClick = { tab = 1 },
+                    )
+                    NavigationBarItem(
+                        icon = Icons.Rounded.Settings,
+                        label = stringResource(R.string.settings),
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
                     )
                 }
             }
         },
         floatingActionButton = {
-            if (tab == 0) {
-                HomeFab(expanded = addMenu, onToggle = { addMenu = it },
+            when (tab) {
+                0 -> HomeFab(expanded = addMenu, onToggle = { addMenu = it },
                     onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
+                1 -> app.andropaw.agent.AgentNewChatFab(onNewChat = {
+                    val c = app.andropaw.agent.AgentStore.newConversation(ctx)
+                    app.andropaw.agent.AgentChatSession.open(ctx, c)
+                    agentChat = true
+                })
             }
         },
     ) { pad ->
@@ -357,6 +388,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             img,
                             baseName = images.firstOrNull { it.id == img.baseId }?.name,
                             modifier = Modifier.animateItem(),
+                            running = runningId == img.id,
                             onStart = { VmActivity.start(ctx, img.id) },
                             onSettings = { settingsFor = img },
                             onRename = { renameFor = img },
@@ -366,6 +398,18 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         )
                     }
                 }
+            } else if (tab == 1) {
+                app.andropaw.agent.AgentHomeContent(
+                    model = model,
+                    padding = PaddingValues(
+                        top = pad.calculateTopPadding(),
+                        bottom = pad.calculateBottomPadding(),
+                    ),
+                    onOpenConversation = { conv ->
+                        app.andropaw.agent.AgentChatSession.open(ctx, conv)
+                        agentChat = true
+                    },
+                )
             } else {
                 SettingsContent(
                     onRestyle = onRestyle,
@@ -451,6 +495,16 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             onOpenUrl = { url -> runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }
         )
     }
+
+    // The AgentPaw chat page; its execution lives in the process-level session,
+    // so leaving and re-entering never interrupts a running turn.
+    if (agentChat) {
+        app.andropaw.agent.AgentChatScreen(
+            bridge = agentBridge,
+            onBack = { agentChat = false },
+        )
+    }
+
 }
 
 @Composable

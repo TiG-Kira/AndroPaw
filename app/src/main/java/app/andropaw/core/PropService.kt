@@ -110,11 +110,28 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
             return
         }
         writes++
-        if (name.startsWith("persist.")) {
-            runCatching { File(paths.root, "data/property/$name").writeText(value) }
-        }
+        // persist.* is written to disk off the lock: a synchronous write here (a stall of the shared
+        // storage blocks every guest's __system_property_set behind it) once froze whole firmwares
+        if (name.startsWith("persist.")) persistQueue.put(name to value)
         onSet?.invoke(name, value)
     }
+
+    /**
+     * persist.* land in /data/property like on a real init, but written by one daemon thread with
+     * coalescing: the value of a key written again before its turn is dropped, the file keeps the
+     * last one. The property area itself is updated synchronously — only the disk copy is deferred.
+     */
+    private val persistQueue = java.util.concurrent.LinkedBlockingQueue<Pair<String, String>>()
+    private val persistThread = Thread({
+        val pending = HashMap<String, String>()
+        while (true) {
+            val item = try { persistQueue.take() } catch (_: InterruptedException) { break }
+            pending[item.first] = item.second
+            while (true) { val n = persistQueue.poll() ?: break; pending[n.first] = n.second }
+            for ((k, v) in pending) runCatching { File(paths.root, "data/property/$k").writeText(v) }
+            pending.clear()
+        }
+    }, "props-persist").apply { isDaemon = true; start() }
 
     @Synchronized
     fun close() {
