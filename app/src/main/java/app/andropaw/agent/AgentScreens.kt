@@ -218,6 +218,12 @@ object AgentChatSession {
 fun AgentHomeContent(
     model: app.andropaw.ui.LibraryModel?,
     padding: PaddingValues,
+    /**
+     * The shell's top-bar scroll connection, applied to the list itself (Termux-Ultra's rule: the
+     * connection belongs to the scrolling child). On a wrapping box it never got a thing to scroll
+     * and the glass top bar stayed put.
+     */
+    modifier: Modifier = Modifier,
     onOpenConversation: (Conversation) -> Unit,
 ) {
     val ctx = LocalContext.current
@@ -236,6 +242,7 @@ fun AgentHomeContent(
     }
 
     LazyColumn(
+        modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = 16.dp, end = 16.dp,
             top = padding.calculateTopPadding() + 8.dp,
@@ -297,6 +304,10 @@ fun AgentHomeContent(
                 }
             }
         }
+
+        // A list of two or three chats is shorter than the screen and cannot be dragged at all, so
+        // the top bar would never collapse: give the page some travel while it is still short.
+        if (conversations.size < 5) item { Spacer(Modifier.fillParentMaxHeight(0.5f)) }
     }
 }
 
@@ -335,7 +346,14 @@ fun AgentChatScreen(
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
     }
 
-    Box(Modifier.fillMaxSize()) {
+    // Opaque: the chat page is composed over the shell (its execution lives in the process-level
+    // session), so it has to cover the page under it completely — left transparent, the
+    // conversation list, the top bar and the FAB all show through and the page looks torn apart.
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background),
+    ) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,

@@ -1031,6 +1031,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             var restarts = HashMap<String, Int>()
             while (!stopping) {
                 Thread.sleep(3000)
+                // keep the session marker fresh: the home page and the AgentPaw page follow it, and
+                // a :vm process killed by the system stops beating, so the marker expires by itself
+                runCatching { VmSession.beat(ctx) }
                 if (power.length() > 0) { val v = runCatching { power.readText().trim() }.getOrDefault("reboot"); power.writeText(""); powerRequest(v) }
                 if (img.api >= 14) runCatching { dns.ensure() }
                 superviseFreeze()

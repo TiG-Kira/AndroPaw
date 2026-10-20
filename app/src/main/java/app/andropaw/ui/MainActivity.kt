@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.text.format.Formatter
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -52,6 +53,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
@@ -66,7 +68,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
@@ -99,9 +105,11 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBarState
 import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
+import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
 import top.yukonga.miuix.kmp.glass.GlassIconButton
 import top.yukonga.miuix.kmp.glass.GlassNavigationBar
 import top.yukonga.miuix.kmp.glass.GlassNavigationItem
+import top.yukonga.miuix.kmp.glass.GlassPopupItem
 import top.yukonga.miuix.kmp.glass.GlassTopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -194,6 +202,16 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     /** The AgentPaw chat page, drawn over the shell. */
     var agentChat by remember { mutableStateOf(false) }
+    /**
+     * A machine card's ⋮ menu: the image and where its icon sits, in root coordinates. The panel
+     * itself is composed on the page box below — inside the card it was clipped by the card and
+     * drawn under the neighbouring ones.
+     */
+    var cardMenu by remember { mutableStateOf<Pair<GuestImage, Rect>?>(null) }
+    /** the page box's own place in root coordinates: the popup's anchor is handed over relative to it */
+    var pageOrigin by remember { mutableStateOf(Offset.Zero) }
+    /** where the shell overlay starts, for a machine card's menu anchor */
+    var menuHostOrigin by remember { mutableStateOf(Offset.Zero) }
     val page = rememberGlassPageBackdrop()
     /** the AgentPaw execution channel: guest commands ride the QEMU path, no host-device control */
     val agentBridge = remember { app.andropaw.agent.AgentVmBridge(ctx.applicationContext, model) }
@@ -359,7 +377,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 // 混合，需要底下有实像素才能成像。没有 card 的页面捕获层是全透明的，
                 // 混合层无物可混，底板层就渲染不出来。
                 .background(MiuixTheme.colorScheme.surface)
-                .nestedScroll(scrollBehavior.nestedScrollConnection),
+                .nestedScroll(scrollBehavior.nestedScrollConnection)
+                .onGloballyPositioned { pageOrigin = it.boundsInRoot().topLeft },
         ) {
             if (tab == 0) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan =
@@ -390,11 +409,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             modifier = Modifier.animateItem(),
                             running = runningId == img.id,
                             onStart = { VmActivity.start(ctx, img.id) },
-                            onSettings = { settingsFor = img },
-                            onRename = { renameFor = img },
-                            onNewMachine = { containerFrom = img },
-                            onReset = { resetFor = img },
-                            onDelete = { deleteFor = img },
+                            onMenu = { anchor -> cardMenu = img to anchor },
                         )
                     }
                 }
@@ -405,6 +420,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         top = pad.calculateTopPadding(),
                         bottom = pad.calculateBottomPadding(),
                     ),
+                    // the top bar follows this page's own scrolling (see AgentHomeContent)
+                    modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
                     onOpenConversation = { conv ->
                         app.andropaw.agent.AgentChatSession.open(ctx, conv)
                         agentChat = true
@@ -420,6 +437,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                     onAbout = { ctx.startActivity(Intent(ctx, AboutActivity::class.java)) },
                 )
             }
+
         }
 
         // 弹窗 / 底部 sheet 必须在 Scaffold 组合范围内：OverlayDialog / OverlayBottomSheet 走
@@ -497,12 +515,39 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     }
 
     // The AgentPaw chat page; its execution lives in the process-level session,
-    // so leaving and re-entering never interrupts a running turn.
+    // so leaving and re-entering never interrupts a running turn. It covers the whole shell:
+    // a transparent page here left the conversation list showing through behind it.
     if (agentChat) {
+        // the system back gesture closes the chat page, not the app
+        BackHandler { agentChat = false }
         app.andropaw.agent.AgentChatScreen(
             bridge = agentBridge,
             onBack = { agentChat = false },
         )
+    }
+
+    // A machine card's menu, composed as a layer over the whole shell rather than inside the
+    // page box: Scaffold draws its top bar, its floating nav bar and the FAB after its
+    // content, and inside the grid the panel was clipped by its own card and covered by the
+    // neighbouring ones.
+    Box(Modifier.fillMaxSize().onGloballyPositioned { menuHostOrigin = it.boundsInRoot().topLeft }) {
+            cardMenu?.let { (img, anchor) ->
+                GlassDropdownPopup(
+                    show = true,
+                    onDismissRequest = { cardMenu = null },
+                    anchorBounds = Rect(
+                        anchor.left - menuHostOrigin.x, anchor.top - menuHostOrigin.y,
+                        anchor.right - menuHostOrigin.x, anchor.bottom - menuHostOrigin.y,
+                    ),
+                    backdrop = page.backdrop,
+                ) {
+                    GlassPopupItem(text = stringResource(R.string.settings), icon = Icons.Rounded.Tune, onClick = { cardMenu = null; settingsFor = img })
+                    GlassPopupItem(text = stringResource(R.string.rename), icon = Icons.Rounded.Edit, onClick = { cardMenu = null; renameFor = img })
+                    GlassPopupItem(text = stringResource(R.string.new_machine), icon = Icons.Rounded.ContentCopy, onClick = { cardMenu = null; containerFrom = img })
+                    GlassPopupItem(text = stringResource(R.string.reset_data), icon = Icons.Rounded.RestartAlt, onClick = { cardMenu = null; resetFor = img })
+                    GlassPopupItem(text = stringResource(R.string.delete), icon = Icons.Rounded.Delete, onClick = { cardMenu = null; deleteFor = img })
+                }
+            }
     }
 
 }

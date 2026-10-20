@@ -42,7 +42,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -87,11 +90,13 @@ fun MachineCard(
     modifier: Modifier = Modifier,
     running: Boolean = false,
     onStart: () -> Unit,
-    onSettings: () -> Unit,
-    onRename: () -> Unit,
-    onNewMachine: () -> Unit,
-    onReset: () -> Unit,
-    onDelete: () -> Unit,
+    /**
+     * The ⋮ was pressed: hands the icon's place, in root coordinates, to the page. The menu panel
+     * cannot be composed here — a GlassDropdownPopup lays itself out on the box it lives in, so
+     * inside a card of the grid it was clipped by the card and covered by its neighbours. The page
+     * hosts the panel instead (Termux-Ultra's rule: the popup belongs to the root box).
+     */
+    onMenu: (Rect) -> Unit,
 ) {
     val ctx = LocalContext.current
     Card(
@@ -121,19 +126,15 @@ fun MachineCard(
                         color = Color(0xFF0B6E66))
                 }
             }
-            Box(Modifier.align(Alignment.TopEnd)) {
-                GlassMenuButton(
-                    icon = Icons.Rounded.MoreVert,
-                    contentDescription = stringResource(R.string.menu),
-                    iconTint = Color.White,
-                    items = listOf(
-                        GlassMenuItem(stringResource(R.string.settings), Icons.Rounded.Tune) { onSettings() },
-                        GlassMenuItem(stringResource(R.string.rename), Icons.Rounded.Edit) { onRename() },
-                        GlassMenuItem(stringResource(R.string.new_machine), Icons.Rounded.ContentCopy) { onNewMachine() },
-                        GlassMenuItem(stringResource(R.string.reset_data), Icons.Rounded.RestartAlt) { onReset() },
-                        GlassMenuItem(stringResource(R.string.delete), Icons.Rounded.Delete) { onDelete() },
-                    ),
-                )
+            // only the button lives here; the panel it drops is hosted by the page (see [onMenu])
+            var menuAnchor by remember { mutableStateOf(Rect.Zero) }
+            Box(
+                Modifier.align(Alignment.TopEnd).size(40.dp).clip(CircleShape)
+                    .clickable { onMenu(menuAnchor) }
+                    .onGloballyPositioned { menuAnchor = it.boundsInRoot() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.MoreVert, stringResource(R.string.menu), tint = Color.White)
             }
             Column(Modifier.align(Alignment.Center).padding(bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(img.release.substringBefore(' ').take(5), fontSize = 40.sp, fontWeight = FontWeight.Bold, color = Color.White)

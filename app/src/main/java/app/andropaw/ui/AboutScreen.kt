@@ -370,19 +370,22 @@ fun AboutScreen(onBack: () -> Unit) {
                     }
                 }
             }
-        }
 
-        UpdateDialog(
-            state = updateState,
-            onDismiss = { updateState = UpdateState.Idle },
-            onStartDownload = ::startDownload,
-            onCancelDownload = {
-                downloadJob?.cancel()
-                updateState = UpdateState.Idle
-            },
-            onInstall = { file -> AppUpdateManager.installApk(context, file) },
-            onOpenUrl = { url -> runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } },
-        )
+            // The update dialogs are miuix overlays: they ride the Scaffold's overlay host, so they
+            // have to be composed inside it — outside, the state lands in an empty table and the
+            // window never opens.
+            UpdateDialog(
+                state = updateState,
+                onDismiss = { updateState = UpdateState.Idle },
+                onStartDownload = ::startDownload,
+                onCancelDownload = {
+                    downloadJob?.cancel()
+                    updateState = UpdateState.Idle
+                },
+                onInstall = { file -> AppUpdateManager.installApk(context, file) },
+                onOpenUrl = { url -> runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } },
+            )
+        }
     }
 }
 

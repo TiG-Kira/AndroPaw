@@ -148,6 +148,26 @@ class VmActivity : ComponentActivity() {
     private val grabThread by lazy { android.os.HandlerThread("frame-grab").apply { start() } }
     private var grabScratch: android.graphics.Bitmap? = null
     private lateinit var box: FrameLayout
+    /**
+     * The Surface is handed to the native bridge off the UI thread, and in order.
+     *
+     * Handing it over directly froze the app on every pause: the callback runs on the UI thread,
+     * and a bridge whose window is going away at that very moment (its surface is being destroyed)
+     * can block in the native call — the UI thread went with it and the machine could only be
+     * brought back by restarting it. A single worker keeps the calls ordered and the UI free.
+     */
+    private val surfaceHand by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "vm-surface").apply { isDaemon = true } }
+    }
+    private fun handSurface(s: android.view.Surface?) {
+        if (!::vm.isInitialized) return
+        surfaceHand.execute { runCatching { vm.surface = s } }
+    }
+    /** the guest screen's frame count as it was when this activity came back, for the check below */
+    private var shownAtResume = -1L
+    /** one-shot: after coming back, is the screen drawing at all? (a stuck bridge is logged, then re-bound) */
+    private var resumeCheckPosted = false
+    private val uiHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
     private var state by mutableStateOf(GuestVm.State.STOPPED)
     /** the guest's notification LED and where the guest screen starts (the LED sits just above it) */
     private var led by mutableStateOf<app.andropaw.core.Lights.Led?>(null)
@@ -186,9 +206,9 @@ class VmActivity : ComponentActivity() {
         box = FrameLayout(this)
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(h: SurfaceHolder) { vm.surface = h.surface }
-            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { vm.surface = h.surface }
-            override fun surfaceDestroyed(h: SurfaceHolder) { vm.surface = null }
+            override fun surfaceCreated(h: SurfaceHolder) { handSurface(h.surface) }
+            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { handSurface(h.surface) }
+            override fun surfaceDestroyed(h: SurfaceHolder) { handSurface(null) }
         })
         guestW = gw; guestH = gh
         guest = GuestScreen(this, gw, gh).apply {
@@ -341,7 +361,49 @@ class VmActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::vm.isInitialized) vm.sensors.resume(true)
+        if (!::vm.isInitialized) return
+        vm.sensors.resume(true)
+        // coming back from the home page or from another app: the window's surface was destroyed
+        // while we were away, so make sure the bridge holds the one that is on screen now (a
+        // create that landed while the activity was stopping is easy to miss)
+        runCatching {
+            val s = surfaceView.holder.surface
+            if (s != null && s.isValid) handSurface(s)
+        }
+        guest.poke()
+        shownAtResume = guest.shown
+        resumeCheckPosted = false
+        postResumeCheck()
+    }
+
+    /**
+     * A few seconds after the screen is back: has anything been drawn? If not, the bridge is stuck
+     * (deadlock or a lost window) — rebind the surface once and write what was seen to the log, so
+     * a frozen machine can be told apart from an idle one without restarting it.
+     */
+    private fun postResumeCheck() {
+        if (resumeCheckPosted || !::vm.isInitialized) return
+        resumeCheckPosted = true
+        uiHandler.postDelayed({
+            if (!::vm.isInitialized || isFinishing || isDestroyed) return@postDelayed
+            val running = vm.state == GuestVm.State.RUNNING
+            if (running && guest.shown == shownAtResume) {
+                vm.log("screen: nothing drawn ${RESUME_CHECK_MS / 1000}s after returning — rebinding the surface")
+                runCatching {
+                    val s = surfaceView.holder.surface
+                    if (s != null && s.isValid) handSurface(s) else handSurface(null)
+                }
+                guest.poke()
+                uiHandler.postDelayed({
+                    if (!::vm.isInitialized || isFinishing || isDestroyed) return@postDelayed
+                    vm.log(
+                        "screen: after rebinding — shown=${guest.shown} (was $shownAtResume) " +
+                            "passthrough=${guest.passthrough} surface=${surfaceView.holder.surface?.isValid} " +
+                            "frames=${if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings}",
+                    )
+                }, RESUME_CHECK_MS)
+            }
+        }, RESUME_CHECK_MS)
     }
 
     override fun onPause() {
@@ -1169,6 +1231,8 @@ class VmActivity : ComponentActivity() {
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_RECOVERY = "recovery"
+        /** how long after returning the screen is checked for frames (see [postResumeCheck]) */
+        private const val RESUME_CHECK_MS = 8_000L
         fun start(ctx: Context, id: String, recovery: Boolean = false) {
             ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
