@@ -215,6 +215,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     val page = rememberGlassPageBackdrop()
     /** the AgentPaw execution channel: guest commands ride the QEMU path, no host-device control */
     val agentBridge = remember { app.andropaw.agent.AgentVmBridge(ctx.applicationContext, model) }
+    LaunchedEffect(Unit) { app.andropaw.agent.ChatSession.attach(ctx.applicationContext, agentBridge) }
 
     // the machine the :vm process keeps running in the background (null: none), polled while the
     // home page is on screen — the card of that machine shows "running" and resumes it on tap

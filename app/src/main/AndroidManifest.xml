@@ -25,6 +25,7 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
+        android:usesCleartextTraffic="true"
         android:name=".AndroPawApp"
         android:allowBackup="false"
         android:extractNativeLibs="true"

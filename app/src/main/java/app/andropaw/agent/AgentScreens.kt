@@ -216,6 +216,8 @@ fun AgentChatScreen(
     onBack: () -> Unit,
 ) {
     val ctx = LocalContext.current
+    // 保底接线：无论从哪个入口进对话页，执行通道与上下文都已就绪（幂等）
+    LaunchedEffect(bridge) { ChatSession.attach(ctx.applicationContext, bridge) }
     val glassPage = app.andropaw.ui.rememberGlassPageBackdrop()
     val scrollBehavior = MiuixScrollBehavior()
     val listState = rememberLazyListState()
