@@ -63,7 +63,7 @@ android {
         targetSdk = 28
         versionCode = 7
         // 0.1.0 起恢复 semver 标准三段格式（此前是 0.0.0.x 四段）
-        versionName = "0.1.3"
+        versionName = "0.1.5"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
