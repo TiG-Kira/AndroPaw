@@ -137,7 +137,20 @@ object AgentChatSession {
     fun open(ctx: Context, conversation: Conversation) {
         activeId = conversation.id
         messages.clear()
-        messages.addAll(conversation.messages)
+        // 旧文件里可能存着重复的 id（provider 复用 call_0 之类的 tool-call id），LazyColumn
+        // 的 key 一见重复就抛异常——读入时统一补成唯一
+        val seen = HashSet<String>()
+        messages.addAll(conversation.messages.map { m ->
+            if (seen.add(m.id)) m else m.copy(id = m.id + "#" + seen.size)
+        })
+    }
+
+    /** 列表内唯一的消息 id：provider 会复用 tool-call id（call_0…），直接拿来当 key 必炸 */
+    private fun freshId(base: String): String {
+        var id = base.ifEmpty { "m" }
+        var n = 0
+        while (messages.any { it.id == id }) { n++; id = "$base~$n" }
+        return id
     }
 
     fun close() {
@@ -156,7 +169,7 @@ object AgentChatSession {
         }
         cancelled = false
         isExecuting = true
-        messages.add(Message("u" + System.currentTimeMillis(), MessageRole.USER, text.trim()))
+        messages.add(Message(freshId("u" + System.currentTimeMillis()), MessageRole.USER, text.trim()))
         val streamingId = "a" + System.currentTimeMillis()
         messages.add(Message(streamingId, MessageRole.ASSISTANT, "", MessageStatus.STREAMING))
         var buffer = StringBuilder()
@@ -190,15 +203,19 @@ object AgentChatSession {
                                 statusLine.value = "running ${ev.call.name}…"
                                 // 工具调用卡片：跟在这轮助手消息后面
                                 messages.add(Message(
-                                    "t${ev.call.id}", MessageRole.TOOL, "", MessageStatus.STREAMING,
+                                    freshId("t" + ev.call.id), MessageRole.TOOL, "", MessageStatus.STREAMING,
                                     toolCallId = ev.call.id,
                                 ).let { it.copy(content = ev.call.name + " " + ev.call.arguments.take(200)) })
                             }
                             is AgentEvent.ToolFinished -> {
                                 statusLine.value = null
                                 val i = messages.indexOfFirst { it.toolCallId == ev.result.toolCallId }
+                                // 截图结果整段 base64 不进 UI 也不进对话文件（几百 KB 且没法看）
+                                val shown = ev.result.content.let { c ->
+                                    if (c.contains("image_base64")) "[screenshot taken]" else c.take(4000)
+                                }
                                 val card = Message(
-                                    "t${ev.result.toolCallId}", MessageRole.TOOL, ev.result.content,
+                                    freshId("t" + ev.result.toolCallId), MessageRole.TOOL, shown,
                                     if (ev.result.isError) MessageStatus.FAILED else MessageStatus.COMPLETE,
                                     toolCallId = ev.result.toolCallId,
                                 )
@@ -427,7 +444,11 @@ fun AgentChatScreen(
                         }
                     },
                     actions = {
-                        GlassIconButton(onClick = { menuOpen = true }, backdrop = glassPage.backdrop) {
+                        GlassIconButton(
+                            onClick = { menuOpen = true },
+                            backdrop = glassPage.backdrop,
+                            modifier = Modifier.onGloballyPositioned { menuIcon = it.boundsInRoot() },
+                        ) {
                             Icon(
                                 imageVector = Icons.Rounded.MoreVert,
                                 contentDescription = stringResource(R.string.menu),
