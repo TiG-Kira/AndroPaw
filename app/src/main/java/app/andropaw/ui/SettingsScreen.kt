@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -126,7 +127,8 @@ fun SettingsContent(
             title = stringResource(R.string.as_language),
             onDismissRequest = { langDialog = false },
         ) {
-            LazyColumn {
+            // Bounded height: an unbounded LazyColumn inside a sheet crashes at measure time.
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
                 items(AppPrefs.LANGUAGES) { (tag, name) ->
                     BasicComponent(
                         title = name.ifEmpty { stringResource(R.string.as_lang_system) },

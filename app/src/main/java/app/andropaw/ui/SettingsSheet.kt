@@ -39,7 +39,6 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 private data class Res(val label: String, val w: Int, val h: Int, val dpi: Int)
 
@@ -54,10 +53,9 @@ private val RAM_STEPS = listOf(0, 256, 512, 768, 1024, 1536, 2048, 3072, 4096)
 @Composable
 fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -> Unit) {
     var s by remember { mutableStateOf(img.settings) }
-    WindowDialog(
+    MiuixSheet(
         show = true,
         title = stringResource(R.string.settings),
-        summary = img.name,
         onDismissRequest = onDismiss,
     ) {
         Column(
@@ -66,6 +64,7 @@ fun SettingsSheet(img: GuestImage, onDismiss: () -> Unit, onSave: (VmSettings) -
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text(img.name, fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             Text(stringResource(R.string.vs_screen), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             if (s.legacyEngine && img.api < 14) {
                 Text(stringResource(R.string.vs_fixed_2x), fontSize = 14.sp)

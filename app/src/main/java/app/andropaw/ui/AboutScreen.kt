@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -190,6 +191,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = (1f - scrollFraction) * (if (darkTheme) 0.5f else 1f) }
+                    .blur(120.dp)
                     .zIndex(-1f),
                 factory = { ctx ->
                     android.view.View(ctx).apply {
@@ -301,38 +303,6 @@ fun AboutScreen(onBack: () -> Unit) {
                             summary = stringResource(R.string.about_developer_handle),
                             onClick = { openUrl(context, devUrl) },
                             startAction = { AvatarBox("https://github.com/TiG-Kira.png") },
-                        )
-                    }
-                }
-
-                // 上游项目卡：基于 AEmulator
-                item {
-                    Text(
-                        text = stringResource(R.string.about_upstream_section),
-                        style = TextStyle(
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
-                    )
-                }
-                item {
-                    val upstreamUrl = stringResource(R.string.about_upstream_url)
-                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                        ArrowPreference(
-                            title = stringResource(R.string.about_upstream_title),
-                            summary = stringResource(R.string.about_upstream_sub),
-                            onClick = { openUrl(context, upstreamUrl) },
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        ArrowPreference(
-                            title = stringResource(R.string.about_upstream_author),
-                            summary = stringResource(R.string.about_upstream_handle),
-                            onClick = { openUrl(context, "https://github.com/uxazu") },
-                            startAction = { AvatarBox("https://github.com/uxazu.png") },
                         )
                     }
                 }

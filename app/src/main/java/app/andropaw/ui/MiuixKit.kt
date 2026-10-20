@@ -39,8 +39,9 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
 import top.yukonga.miuix.kmp.glass.GlassPopupItem
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * AndroPaw — miuix building blocks.
@@ -145,8 +146,37 @@ fun DialogButtonRow(actions: List<DialogAction>) {
 }
 
 /**
- * A HyperOS-style dialog on miuix [WindowDialog] — a bottom sheet on phones, centred on
- * large screens. [content] is placed in a 14dp-spaced column; put a [DialogButtonRow] last.
+ * How many popups currently ask the floating glass nav bar to sink off-screen.
+ * Every dialog / bottom sheet registers itself here for the duration it is shown — the same
+ * contract Termux-Ultra's MainNavBarHideEffect fulfils for its wrappers, so no new popup can
+ * miss the behaviour. The home screen folds this into the bar's `visible`.
+ */
+object MainNavBarVisibility {
+    var hideRequesters by mutableStateOf(0)
+    val hidden: Boolean get() = hideRequesters > 0
+}
+
+/**
+ * Registers [shown] with [MainNavBarVisibility] for as long as it is true.
+ * Call from every popup wrapper — a popup that shows without this leaves the glass bar frozen
+ * above it.
+ */
+@Composable
+fun MainNavBarHideEffect(shown: Boolean) {
+    androidx.compose.runtime.DisposableEffect(shown) {
+        if (shown) MainNavBarVisibility.hideRequesters++
+        onDispose { if (MainNavBarVisibility.hideRequesters > 0) MainNavBarVisibility.hideRequesters-- }
+    }
+}
+
+/**
+ * A HyperOS-style dialog on miuix [OverlayDialog] — the Termux-Ultra way. Unlike the
+ * window-based [top.yukonga.miuix.kmp.window.WindowDialog], an overlay dialog renders inside
+ * the same window, which keeps it under the glass popup layer and away from the
+ * separate-window focus quirks that crashed the former dialogs. Bottom sheet on phones,
+ * centred on large screens.
+ *
+ * [content] is placed in a 14dp-spaced column; put a [DialogButtonRow] last.
  */
 @Composable
 fun MiuixDialog(
@@ -156,13 +186,36 @@ fun MiuixDialog(
     onDismissRequest: (() -> Unit)?,
     content: @Composable () -> Unit,
 ) {
-    WindowDialog(
+    MainNavBarHideEffect(show)
+    OverlayDialog(
         show = show,
         title = title,
         summary = summary,
         onDismissRequest = onDismissRequest,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { content() }
+    }
+}
+
+/**
+ * A bottom sheet on miuix [OverlayBottomSheet] — the overlay twin of [MiuixDialog] for the
+ * larger sheets (firmware library, per-machine settings). Same window as the app, so the
+ * glass nav bar can sink under it and the backdrop layer stays intact.
+ */
+@Composable
+fun MiuixSheet(
+    show: Boolean,
+    title: String,
+    onDismissRequest: (() -> Unit)?,
+    content: @Composable () -> Unit,
+) {
+    MainNavBarHideEffect(show)
+    OverlayBottomSheet(
+        show = show,
+        title = title,
+        onDismissRequest = onDismissRequest,
+    ) {
+        content()
     }
 }
 

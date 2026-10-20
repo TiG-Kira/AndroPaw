@@ -64,6 +64,12 @@
         </activity>
 
         <activity
+            android:name=".ui.AboutActivity"
+            android:exported="false"
+            android:label="@string/about_title"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".ui.VmActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation"
             android:exported="false"

@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.padding
@@ -64,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
@@ -86,11 +88,15 @@ import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
+import top.yukonga.miuix.kmp.basic.NavigationBar
+import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.RadioButton
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TopAppBarState
 import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
 import top.yukonga.miuix.kmp.glass.GlassIconButton
 import top.yukonga.miuix.kmp.glass.GlassNavigationBar
@@ -185,19 +191,35 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
     /** 0 = emulator page, 1 = settings page. */
     var tab by remember { mutableStateOf(0) }
-    /** Standalone About page, drawn over the shell. */
-    var about by remember { mutableStateOf(false) }
     val page = rememberGlassPageBackdrop()
 
     // Termux-Ultra floating glass nav-bar placement: the bar is inset 24 dp on both sides and
-    // sits flush on top of the system navigation bars (plain inset, no floor), while the pages
-    // run full height and pass under bar and top bar alike.
+    // sits on top of the system navigation bars, floored at 12 dp (gesture bars keep their own
+    // height, three-button nav its taller inset, and devices without any nav bar still get the
+    // fallback clearance so the capsule never sits flush).
     val density = LocalDensity.current
     val systemNavBarsHeight = with(density) {
-        WindowInsets.navigationBars.getBottom(density).toDp()
+        maxOf(WindowInsets.navigationBars.getBottom(density), 12.dp.roundToPx()).toDp()
     }
-    // The bar sinks off-screen while the IME is up, like Termux-Ultra's default nav bar.
+    // The bar sinks off-screen while the IME is up or a popup asks for it, like Termux-Ultra's
+    // default nav bar.
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    val navBarVisible = !imeVisible && !MainNavBarVisibility.hidden
+
+    // The glass top bar needs a ScrollBehavior to collapse and to keep its action-button pills
+    // bare at rest: without one the bar reports "floating" all the time and the pills never
+    // hide. The behaviour is remembered with stable pieces (Termux-Ultra's fix for the
+    // collapse-snap being torn down on every recomposition).
+    val topAppBarState = remember { TopAppBarState(0f, 0f, 0f) }
+    val canScrollAlways = remember { { true } }
+    val snapSpec = remember { androidx.compose.animation.core.spring<Float>(stiffness = 2500f) }
+    val flingSpec = androidx.compose.animation.rememberSplineBasedDecay<Float>()
+    val scrollBehavior = MiuixScrollBehavior(
+        state = topAppBarState,
+        canScroll = canScrollAlways,
+        snapAnimationSpec = snapSpec,
+        flingAnimationSpec = flingSpec,
+    )
 
     val scope = rememberCoroutineScope()
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
@@ -240,9 +262,9 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             GlassTopAppBar(
-                title = if (tab == 0) stringResource(R.string.app_name) else stringResource(R.string.settings),
-                subtitle = if (tab == 0) stringResource(R.string.lib_subtitle) else "",
+                title = if (tab == 0) stringResource(R.string.tab_emulator) else stringResource(R.string.settings),
                 backdrop = page.backdrop,
+                scrollBehavior = scrollBehavior,
                 actions = {
                     if (tab == 0) {
                         GlassIconButton(onClick = { help = true }) {
@@ -253,20 +275,40 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             )
         },
         bottomBar = {
-            // Floating glass bar, Termux-Ultra default: 24 dp side margins, bottom edge riding the
-            // system navigation bars exactly (plain inset, no floor). No wrapper Box, no union
-            // insets — the bar floats over the content instead of docking to it.
-            GlassNavigationBar(
-                items = listOf(
-                    GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
-                    GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
-                ),
-                selectedIndex = tab,
-                onSelect = { tab = it },
-                visible = !imeVisible,
-                backdrop = page.backdrop,
-                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = systemNavBarsHeight),
-            )
+            // Floating glass bar, Termux-Ultra default: 24 dp side margins, bottom edge riding
+            // the system navigation bars (floored at 12 dp). The glass shader pipeline needs
+            // runtime shaders (API 33+); below that — and for the classic look — miuix's plain
+            // NavigationBar takes over, like Termux-Ultra's fallback path.
+            if (Build.VERSION.SDK_INT >= 33) {
+                GlassNavigationBar(
+                    items = listOf(
+                        GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                        GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
+                    ),
+                    selectedIndex = tab,
+                    onSelect = { tab = it },
+                    visible = navBarVisible,
+                    backdrop = page.backdrop,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = systemNavBarsHeight),
+                )
+            } else {
+                NavigationBar(
+                    modifier = Modifier.padding(bottom = systemNavBarsHeight),
+                ) {
+                    NavigationBarItem(
+                        icon = Icons.Rounded.Android,
+                        label = stringResource(R.string.tab_emulator),
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                    )
+                    NavigationBarItem(
+                        icon = Icons.Rounded.Settings,
+                        label = stringResource(R.string.settings),
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                    )
+                }
+            }
         },
         floatingActionButton = {
             if (tab == 0) {
@@ -277,8 +319,13 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     ) { pad ->
         // Pages run full height and pass under the glass bars — the Scaffold padding is spent as
         // scrollable content clearance, never as layout padding. That's what gives both bars
-        // something to refract.
-        Box(Modifier.fillMaxSize().then(page.contentModifier)) {
+        // something to refract. The nestedScroll connection feeds the top bar's collapse.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(page.contentModifier)
+                .nestedScroll(scrollBehavior.nestedScrollConnection),
+        ) {
             if (tab == 0) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan =
                     { GridItemSpan(maxLineSpan) }
@@ -322,15 +369,10 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         top = pad.calculateTopPadding(),
                         bottom = pad.calculateBottomPadding(),
                     ),
-                    onAbout = { about = true },
+                    onAbout = { ctx.startActivity(Intent(ctx, AboutActivity::class.java)) },
                 )
             }
         }
-    }
-
-    // The About page is a standalone glass page drawn over the whole shell.
-    if (about) {
-        AboutScreen(onBack = { about = false })
     }
 
     settingsFor?.let { img ->
@@ -383,8 +425,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             ))
         }
     }
-    if (help) HelpDialog(onDismiss = { help = false })
-    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
+    if (help) HelpDialog(onDismiss = { help = false })    if (library) LibrarySheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
         onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
         onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
         onNewMachine = { library = false; containerFrom = it })
@@ -584,7 +625,11 @@ private fun HelpDialog(onDismiss: () -> Unit) {
         title = stringResource(R.string.help_title),
         onDismissRequest = onDismiss,
     ) {
-        Column(Modifier.verticalScroll(rememberScrollState())) {
+        Column(
+            Modifier
+                .heightIn(max = 420.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
             Text(stringResource(R.string.help_text), fontSize = 14.sp)
         }
         DialogButtonRow(listOf(DialogAction(stringResource(R.string.ok), onClick = onDismiss, primary = true)))

@@ -197,15 +197,9 @@
     <string name="about_android_version">Android version</string>
     <string name="about_kernel">Kernel</string>
     <string name="about_developer_section">Developer</string>
-    <string name="about_developer_name">TiG-Kira（极犽）</string>
+    <string name="about_developer_name">极犽</string>
     <string name="about_developer_handle">\@TiG-Kira</string>
     <string name="about_developer_url">https://github.com/TiG-Kira</string>
-    <string name="about_upstream_section">Upstream project</string>
-    <string name="about_upstream_title">Based on AEmulator</string>
-    <string name="about_upstream_sub">AndroPaw is built on AEmulator by \@uxazu — the original SENSES emulator</string>
-    <string name="about_upstream_author">uxazu — original AEmulator author</string>
-    <string name="about_upstream_handle">\@uxazu</string>
-    <string name="about_upstream_url">https://github.com/uxazu/aemulator</string>
     <string name="about_version_info">Version info</string>
     <string name="about_app_version_label">AndroPaw version</string>
     <string name="about_upstream_info">Based on AEmulator by uxazu, which grew from the original SENSES emulator.</string>

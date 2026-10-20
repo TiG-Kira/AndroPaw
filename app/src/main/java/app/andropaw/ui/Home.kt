@@ -59,7 +59,6 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * The vendor's look for a machine card: a "screen" gradient that tells TouchWiz, MIUI, Sense, Xperia… apart at a
@@ -212,13 +211,14 @@ fun LibrarySheet(
 ) {
     var files by remember { mutableStateOf(emptyList<java.io.File>()) }
     DisposableEffect(Unit) {
-        val t = Thread { files = app.andropaw.core.FirmwareFolder.list() }.apply { start() }
+        val t = Thread {
+            runCatching { app.andropaw.core.FirmwareFolder.list() }.getOrDefault(emptyList()).let { files = it }
+        }.apply { start() }
         onDispose { t.interrupt() }
     }
-    WindowDialog(
+    MiuixSheet(
         show = true,
         title = stringResource(R.string.vmos_add_title),
-        summary = stringResource(R.string.add_container_sub),
         onDismissRequest = onDismiss,
     ) {
         Column(
@@ -227,6 +227,8 @@ fun LibrarySheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Text(stringResource(R.string.add_container_sub), fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
             // Quick Import Card
             Card(
                 onClick = onImportFile,
