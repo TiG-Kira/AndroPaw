@@ -358,10 +358,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             when (tab) {
                 0 -> HomeFab(expanded = addMenu, onToggle = { addMenu = it },
                     onImport = { pick.launch(arrayOf("*/*")) }, onLibrary = { library = true })
-                1 -> app.andropaw.agent.AgentNewChatFab(onNewChat = {
-                    app.andropaw.agent.ChatSession.newConversation(ctx)
-                    agentChat = true
-                })
+                // AgentPaw tab: no FAB — the conversation list's own "new chat" card is the
+                // single creation path (the FAB used to create a second conversation on top)
             }
         },
     ) { pad ->

@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.andropaw.R
+import app.andropaw.core.VmSession
 import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
 import app.andropaw.ui.MiuixDialog
 import app.andropaw.ui.ProvideNavigationEventOwner
@@ -111,27 +112,37 @@ fun AgentHomeContent(
     val scrollBehavior = MiuixScrollBehavior()
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
     var version by remember { mutableStateOf(0) }
+    var runningName by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         ChatSession.loadAll(ctx)
         ChatSession.onChange { version++ }
-        while (true) { delay(1200) }
+        while (true) {
+            val id = VmSession.runningId(ctx)
+            runningName = id?.let { app.andropaw.core.ImageStore.get(ctx, it)?.name }
+            delay(1500)
+        }
     }
     val ordered = remember(version) { ChatSession.conversations.sortedByDescending { it.updatedAt } }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
-    ) { pad ->
+    ) { _ ->
         Box(Modifier.fillMaxSize().then(glassPage.contentModifier)) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().nestedScroll(scrollBehavior.nestedScrollConnection),
+                // 留白来自外壳 Scaffold（玻璃顶栏/底栏的让位），与本页内层 Scaffold 无关
                 contentPadding = PaddingValues(
                     start = 16.dp, end = 16.dp,
-                    top = pad.calculateTopPadding() + 16.dp,
-                    bottom = pad.calculateBottomPadding() + 16.dp,
+                    top = padding.calculateTopPadding() + 16.dp,
+                    bottom = padding.calculateBottomPadding() + 16.dp,
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item {
+                    // 运行状态横幅：AgentPaw 的能力挂在哪台机器上，一眼可见
+                    StatusBanner(runningName)
+                }
                 item {
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
@@ -587,16 +598,41 @@ private fun formatRelativeTime(ts: Long): String {
     }
 }
 
-/** 新建对话悬浮键（AgentPaw 列表页的 FAB） */
+/** 运行状态横幅：哪台机器在跑（AgentPaw 的一切操作都落在它身上） */
 @Composable
-fun AgentNewChatFab(onNewChat: () -> Unit) {
-    val ctx = LocalContext.current
-    Box(
-        Modifier.size(52.dp).clip(CircleShape)
-            .background(MiuixTheme.colorScheme.primary)
-            .clickable { ChatSession.newConversation(ctx); onNewChat() },
-        contentAlignment = Alignment.Center,
+private fun StatusBanner(runningName: String?) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(
+                if (runningName != null) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
+                else MiuixTheme.colorScheme.surface
+            )
+            .border(0.5.dp, CardBorder, RoundedCornerShape(16.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Icon(Icons.Rounded.Add, stringResource(R.string.agent_new_chat), Modifier.size(24.dp), tint = MiuixTheme.colorScheme.onPrimary)
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(
+                if (runningName != null) MiuixTheme.colorScheme.primary.copy(alpha = 0.18f)
+                else MiuixTheme.colorScheme.surfaceContainerHigh
+            ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.AutoAwesome, null, Modifier.size(20.dp), tint = MiuixTheme.colorScheme.primary)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (runningName != null) stringResource(R.string.agent_attached, runningName)
+                else stringResource(R.string.agent_no_machine),
+                fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                if (runningName != null) stringResource(R.string.agent_attached_sub)
+                else stringResource(R.string.agent_no_machine_sub),
+                fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
     }
 }
