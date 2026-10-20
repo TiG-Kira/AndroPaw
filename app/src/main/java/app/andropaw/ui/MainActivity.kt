@@ -693,7 +693,7 @@ private fun ImportCard(s: ImportState, onCancel: () -> Unit, onDismiss: () -> Un
         insideMargin = PaddingValues(20.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            if (s.active) CircularProgressIndicator(Modifier.size(40.dp))
+            if (s.active) CircularProgressIndicator(size = 40.dp)
             else Icon(if (s.error != null) Icons.Rounded.Warning else Icons.Rounded.Android, null)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {

@@ -793,7 +793,7 @@ class VmActivity : ComponentActivity() {
                 Box(Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)
                     .clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f))) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(24.dp))
+                        CircularProgressIndicator(size = 24.dp, strokeWidth = 3.dp)
                         Spacer(Modifier.width(6.dp))
                         Text(stringResource(R.string.vm_booting_short, seconds.toInt()), fontSize = 12.sp)
                     }
@@ -1119,7 +1119,7 @@ class VmActivity : ComponentActivity() {
                         Button(onClick = { thread { vm.stop(); vm.boot() } }) { Text(stringResource(R.string.retry)) }
                     }
                 } else {
-                    CircularProgressIndicator(Modifier.size(64.dp))
+                    CircularProgressIndicator(size = 64.dp)
                     Spacer(Modifier.height(16.dp))
                     Text(vm.img.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Text(vm.img.displayVersion, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)

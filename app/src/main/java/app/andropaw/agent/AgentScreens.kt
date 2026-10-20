@@ -41,7 +41,7 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material3.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -315,7 +315,7 @@ fun AgentChatScreen(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 if (isLoading && !isStreaming) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MiuixTheme.colorScheme.primary)
+                                    Box(contentAlignment = Alignment.Center) { CircularProgressIndicator(size = 16.dp, strokeWidth = 2.dp) }
                                 } else if (isStreaming) {
                                     Icon(Icons.Rounded.Stop, stringResource(R.string.agent_stop), Modifier.size(14.dp), tint = MiuixTheme.colorScheme.surface)
                                 } else {
@@ -572,7 +572,7 @@ private fun parseMarkdown(text: String): androidx.compose.ui.text.AnnotatedStrin
 @Composable
 private fun TypingIndicator() {
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = MiuixTheme.colorScheme.primary)
+        Box(contentAlignment = Alignment.Center) { CircularProgressIndicator(size = 14.dp, strokeWidth = 2.dp) }
         Text("…", fontSize = 13.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
     }
 }
