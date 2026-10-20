@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="../../docs/assets/logo.png" width="128" alt="AEmulator logo"/>
+<img src="../../docs/assets/logo.png" width="128" alt="AndroPaw logo"/>
 
-# AEmulator
+# AndroPaw
 
-*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
+*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
 
 **클래식 Android 펌웨어 — HTC Sense, TouchWiz, MIUI, AOSP — 를 최신 휴대폰에서. 루팅도 PC도 필요 없습니다.**
 
-[![Version](https://img.shields.io/badge/version-0.0.0.3-3D5AFE?style=for-the-badge)](https://github.com/uxazu/aemulator/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/uxazu/aemulator) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
+[![Version](https://img.shields.io/badge/version-0.2.0-3D5AFE?style=for-the-badge)](https://github.com/TiG-Kira/AndroPaw/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TiG-Kira/AndroPaw) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
 
 [🇬🇧 English](../../README.md) · [🇷🇺 Русский](README.ru.md) · [🇺🇦 Українська](README.uk.md) · [🇩🇪 Deutsch](README.de.md) · [🇫🇷 Français](README.fr.md) · [🇪🇸 Español](README.es.md) · [🇧🇷 Português](README.pt-BR.md) · [🇮🇹 Italiano](README.it.md) · [🇵🇱 Polski](README.pl.md) · [🇹🇷 Türkçe](README.tr.md) · [🇸🇦 العربية](README.ar.md) · [🇮🇷 فارسی](README.fa.md) · [🇮🇳 हिन्दी](README.hi.md) · [🇮🇩 Indonesia](README.id.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja.md) · **🇰🇷 한국어**
 
@@ -16,7 +16,7 @@
 
 ---
 
-AEmulator는 펌웨어 파일에서 진짜 Android 2.3–17 시스템을 바로 부팅합니다: 리커버리 ZIP, Odin 아카이브, Google 팩토리 이미지, GSI. 오래된 32비트 펌웨어(2.3–4.4)는 수정된 QEMU로 실행하고, Android 5.0–17은 휴대폰의 arm64 코어에서 네이티브로 실행하며, 커널 binder를 에뮬레이션하며, 그래픽은 휴대폰 GPU로, 소리는 Android 오디오로 처리합니다. 모두 평범한 앱 안에서 동작합니다.
+AndroPaw는 펌웨어 파일에서 진짜 Android 2.3–17 시스템을 바로 부팅합니다: 리커버리 ZIP, Odin 아카이브, Google 팩토리 이미지, GSI. 오래된 32비트 펌웨어(2.3–4.4)는 수정된 QEMU로 실행하고, Android 5.0–17은 휴대폰의 arm64 코어에서 네이티브로 실행하며, 커널 binder를 에뮬레이션하며, 그래픽은 휴대폰 GPU로, 소리는 Android 오디오로 처리합니다. 모두 평범한 앱 안에서 동작합니다.
 
 ## ✨ 기능
 
@@ -24,8 +24,9 @@ AEmulator는 펌웨어 파일에서 진짜 Android 2.3–17 시스템을 바로 
 - 제조사 UI가 그대로 동작: HTC Sense, Samsung TouchWiz, MIUI, AOSP
 - GL 브리지 하드웨어 그래픽, 소리, 터치와 멀티터치, 최신 TLS 프록시 네트워크
 - APK·음악·사진을 위한 공유 메모리 카드 폴더
-- 18개 언어의 Material 3 Expressive 인터페이스
+- Ki 스타일 카드를 갖춘 Material 3 Expressive 인터페이스, 18개 언어 지원
 - 무료 오픈 소스(GPL-3.0)
+- AgentPaw — 실행 중인 머신에 연결되어 펌웨어 가져오기, 설정 변경, 멈춘 시스템 복구를 수행하는 내장형 AI 어시스턴트 (OpenAI 호환 엔드포인트 모두)
 
 ## 📱 펌웨어 목록
 
@@ -39,9 +40,9 @@ AEmulator는 펌웨어 파일에서 진짜 Android 2.3–17 시스템을 바로 
 
 ## 🚀 빠른 시작
 
-1. [Releases](https://github.com/uxazu/aemulator/releases)에서 APK를 받아 설치합니다.
+1. [Releases](https://github.com/TiG-Kira/AndroPaw/releases)에서 APK를 받아 설치합니다.
 2. [포럼](https://aeforum.uxazuu.space/)에서 펌웨어를 찾아 휴대폰에 내려받으세요.
-3. AEmulator → **펌웨어 추가**에서 파일을 고릅니다. 가져오기는 몇 분 걸립니다.
+3. AndroPaw → **펌웨어 추가**에서 파일을 고릅니다. 가져오기는 몇 분 걸립니다.
 4. **시작**을 누릅니다. 첫 부팅은 앱 최적화로 더 오래 걸립니다.
 5. ⋮ 메뉴에서 볼륨·전원 버튼·로그, ⚙️에서 설정과 언어.
 
@@ -60,18 +61,18 @@ Android 2.3–4.4에서는 각 게스트 프로세스가 수정된 사용자 모
 JDK 17, Android SDK 36, NDK r28이 필요합니다. 게스트 라이브러리는 `native/*/build.sh`로 빌드합니다.
 
 ```bash
-git clone https://github.com/uxazu/aemulator.git
-cd aemulator
+git clone https://github.com/TiG-Kira/AndroPaw.git
+cd AndroPaw
 ./gradlew assembleRelease
 ```
 
 ## 🙏 감사의 말
 
-AEmulator는 [원작자](https://t.me/istratii_tech1)의 HTC Desire HD·HTC One M7 에뮬레이터에서 시작되었습니다. 그의 엔진이 없었다면 이 프로젝트도 없었습니다.
+AndroPaw는 [원작자](https://t.me/istratii_tech1)의 HTC Desire HD·HTC One M7 에뮬레이터에서 시작되었습니다. 그의 엔진이 없었다면 이 프로젝트도 없었습니다.
 
 ## 💙 프로젝트 후원
 
-AEmulator로 추억의 휴대폰을 되살렸다면 개발을 후원할 수 있습니다:
+AndroPaw로 추억의 휴대폰을 되살렸다면 개발을 후원할 수 있습니다:
 
 - 💳 [dalink.to/uxazu](https://dalink.to/uxazu)
 
@@ -80,7 +81,7 @@ AEmulator로 추억의 휴대폰을 되살렸다면 개발을 후원할 수 있�
 - 🌐 웹사이트: [aemulator.gt.tc](https://aemulator.gt.tc)
 - 💬 포럼: [aeforum.uxazuu.space](https://aeforum.uxazuu.space/)
 - 📣 텔레그램 채널: [@aemulatorofficial](https://t.me/aemulatorofficial)
-- 👤 제작자: [uxazu](https://github.com/uxazu)
+- 👤 제작자: [TiG-Kira](https://github.com/TiG-Kira)
 - 🧬 원작자: [t.me/istratii_tech1](https://t.me/istratii_tech1)
 
 ## 📄 라이선스

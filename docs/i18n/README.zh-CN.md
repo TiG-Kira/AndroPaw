@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="../../docs/assets/logo.png" width="128" alt="AEmulator logo"/>
+<img src="../../docs/assets/logo.png" width="128" alt="AndroPaw logo"/>
 
-# AEmulator
+# AndroPaw
 
-*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
+*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
 
 **在现代手机上运行经典 Android 固件——HTC Sense、TouchWiz、MIUI、AOSP。无需 root，无需电脑。**
 
-[![Version](https://img.shields.io/badge/version-0.0.0.3-3D5AFE?style=for-the-badge)](https://github.com/uxazu/aemulator/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/uxazu/aemulator) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
+[![Version](https://img.shields.io/badge/version-0.2.0-3D5AFE?style=for-the-badge)](https://github.com/TiG-Kira/AndroPaw/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TiG-Kira/AndroPaw) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
 
 [🇬🇧 English](../../README.md) · [🇷🇺 Русский](README.ru.md) · [🇺🇦 Українська](README.uk.md) · [🇩🇪 Deutsch](README.de.md) · [🇫🇷 Français](README.fr.md) · [🇪🇸 Español](README.es.md) · [🇧🇷 Português](README.pt-BR.md) · [🇮🇹 Italiano](README.it.md) · [🇵🇱 Polski](README.pl.md) · [🇹🇷 Türkçe](README.tr.md) · [🇸🇦 العربية](README.ar.md) · [🇮🇷 فارسی](README.fa.md) · [🇮🇳 हिन्दी](README.hi.md) · [🇮🇩 Indonesia](README.id.md) · [🇻🇳 Tiếng Việt](README.vi.md) · **🇨🇳 简体中文** · [🇯🇵 日本語](README.ja.md) · [🇰🇷 한국어](README.ko.md)
 
@@ -16,7 +16,7 @@
 
 ---
 
-AEmulator 直接从固件文件启动真实的 Android 2.3–17 系统：Recovery 卡刷包、Odin 包Google 出厂镜像或 GSI。旧的 32 位固件（2.3–4.4）通过改进的 QEMU 运行，Android 5.0–17 直接在手机的 arm64 核心上原生运行；内核 binder 被模拟，图形使用手机 GPU 绘制，声音经由 Android 音频系统播放——一切都在一个普通应用里完成。
+AndroPaw 直接从固件文件启动真实的 Android 2.3–17 系统：Recovery 卡刷包、Odin 包Google 出厂镜像或 GSI。旧的 32 位固件（2.3–4.4）通过改进的 QEMU 运行，Android 5.0–17 直接在手机的 arm64 核心上原生运行；内核 binder 被模拟，图形使用手机 GPU 绘制，声音经由 Android 音频系统播放——一切都在一个普通应用里完成。
 
 ## ✨ 功能
 
@@ -24,8 +24,9 @@ AEmulator 直接从固件文件启动真实的 Android 2.3–17 系统：Recover
 - 厂商系统原样运行：HTC Sense、三星 TouchWiz、MIUI、AOSP
 - 经 GL 桥的硬件图形、声音、触控与多点触控，带现代 TLS 代理的网络
 - 共享存储卡文件夹，方便放 APK、音乐和照片
-- Material 3 Expressive 界面，支持 18 种语言
+- Material 3 Expressive 风格界面，含 Ki 风卡片，支持 18 种语言
 - 免费开源（GPL-3.0）
+- AgentPaw——应用内 AI 助手，可接管正在运行的虚拟机，帮你导入固件、修改设置或恢复卡死的系统（兼容任意 OpenAI 格式接口）
 
 ## 📱 固件列表
 
@@ -39,9 +40,9 @@ AEmulator 直接从固件文件启动真实的 Android 2.3–17 系统：Recover
 
 ## 🚀 快速开始
 
-1. 从 [Releases](https://github.com/uxazu/aemulator/releases) 下载并安装 APK。
+1. 从 [Releases](https://github.com/TiG-Kira/AndroPaw/releases) 下载并安装 APK。
 2. 在[论坛](https://aeforum.uxazuu.space/)找到固件并下载到手机。
-3. 打开 AEmulator →**添加固件**并选择文件。导入需要几分钟。
+3. 打开 AndroPaw →**添加固件**并选择文件。导入需要几分钟。
 4. 点击**启动**。首次启动较慢：系统正在优化应用。
 5. ⋮ 菜单可调音量、电源键和日志；⚙️ 打开设置与语言。
 
@@ -60,18 +61,18 @@ AEmulator 直接从固件文件启动真实的 Android 2.3–17 系统：Recover
 需要 JDK 17、Android SDK 36 和 NDK r28。客户机库通过 `native/*/build.sh` 构建。
 
 ```bash
-git clone https://github.com/uxazu/aemulator.git
-cd aemulator
+git clone https://github.com/TiG-Kira/AndroPaw.git
+cd AndroPaw
 ./gradlew assembleRelease
 ```
 
 ## 🙏 致谢
 
-AEmulator 源自[原作者](https://t.me/istratii_tech1)的 HTC Desire HD 与 HTC One M7 模拟器——没有他的引擎就没有本项目。
+AndroPaw 源自[原作者](https://t.me/istratii_tech1)的 HTC Desire HD 与 HTC One M7 模拟器——没有他的引擎就没有本项目。
 
 ## 💙 支持项目
 
-如果 AEmulator 让你心爱的手机重获新生，欢迎支持开发：
+如果 AndroPaw 让你心爱的手机重获新生，欢迎支持开发：
 
 - 💳 [dalink.to/uxazu](https://dalink.to/uxazu)
 
@@ -80,7 +81,7 @@ AEmulator 源自[原作者](https://t.me/istratii_tech1)的 HTC Desire HD 与 HT
 - 🌐 网站: [aemulator.gt.tc](https://aemulator.gt.tc)
 - 💬 论坛: [aeforum.uxazuu.space](https://aeforum.uxazuu.space/)
 - 📣 Telegram 频道: [@aemulatorofficial](https://t.me/aemulatorofficial)
-- 👤 作者: [uxazu](https://github.com/uxazu)
+- 👤 作者: [TiG-Kira](https://github.com/TiG-Kira)
 - 🧬 原作者: [t.me/istratii_tech1](https://t.me/istratii_tech1)
 
 ## 📄 许可证

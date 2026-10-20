@@ -7,13 +7,13 @@
  * Внутри AEMU_CONFIG должен оставаться чистый JSON (двойные кавычки, без комментариев и хвостовых запятых).
  */
 window.AEMU_CONFIG = {
-  "version": "0.0.0.3",
+  "version": "0.2.0",
   "links": {
-    "repo": "https://github.com/uxazu/aemulator",
+    "repo": "https://github.com/TiG-Kira/AndroPaw",
     "site": "https://aemulator.gt.tc",
     "forum": "https://aeforum.uxazuu.space/",
     "channel": "https://t.me/aemulatorofficial",
-    "author": "https://github.com/uxazu",
+    "author": "https://github.com/TiG-Kira",
     "original": "https://t.me/istratii_tech1",
     "donate": "https://dalink.to/uxazu"
   }

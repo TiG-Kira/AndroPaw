@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="../../docs/assets/logo.png" width="128" alt="AEmulator logo"/>
+<img src="../../docs/assets/logo.png" width="128" alt="AndroPaw logo"/>
 
-# AEmulator
+# AndroPaw
 
-*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
+*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
 
 **Klasyczne firmware Androida — HTC Sense, TouchWiz, MIUI, AOSP — na nowoczesnym telefonie. Bez roota, bez PC.**
 
-[![Version](https://img.shields.io/badge/version-0.0.0.3-3D5AFE?style=for-the-badge)](https://github.com/uxazu/aemulator/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/uxazu/aemulator) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
+[![Version](https://img.shields.io/badge/version-0.2.0-3D5AFE?style=for-the-badge)](https://github.com/TiG-Kira/AndroPaw/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TiG-Kira/AndroPaw) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
 
 [🇬🇧 English](../../README.md) · [🇷🇺 Русский](README.ru.md) · [🇺🇦 Українська](README.uk.md) · [🇩🇪 Deutsch](README.de.md) · [🇫🇷 Français](README.fr.md) · [🇪🇸 Español](README.es.md) · [🇧🇷 Português](README.pt-BR.md) · [🇮🇹 Italiano](README.it.md) · **🇵🇱 Polski** · [🇹🇷 Türkçe](README.tr.md) · [🇸🇦 العربية](README.ar.md) · [🇮🇷 فارسی](README.fa.md) · [🇮🇳 हिन्दी](README.hi.md) · [🇮🇩 Indonesia](README.id.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja.md) · [🇰🇷 한국어](README.ko.md)
 
@@ -16,7 +16,7 @@
 
 ---
 
-AEmulator uruchamia prawdziwy system Android 2.3–17 prosto z pliku firmware: ZIP do recovery, archiwum Odin lub obraz fabryczny Google albo GSI. Stare 32-bitowe firmware (2.3–4.4) działa przez zmodyfikowane QEMU, Android 5.0–17 natywnie na rdzeniach arm64 telefonu; binder jądra jest emulowany, grafika korzysta z GPU telefonu, a dźwięk z systemu audio Androida — wszystko w zwykłej aplikacji.
+AndroPaw uruchamia prawdziwy system Android 2.3–17 prosto z pliku firmware: ZIP do recovery, archiwum Odin lub obraz fabryczny Google albo GSI. Stare 32-bitowe firmware (2.3–4.4) działa przez zmodyfikowane QEMU, Android 5.0–17 natywnie na rdzeniach arm64 telefonu; binder jądra jest emulowany, grafika korzysta z GPU telefonu, a dźwięk z systemu audio Androida — wszystko w zwykłej aplikacji.
 
 ## ✨ Funkcje
 
@@ -24,8 +24,9 @@ AEmulator uruchamia prawdziwy system Android 2.3–17 prosto z pliku firmware: Z
 - Nakładki producentów działają bez zmian: HTC Sense, Samsung TouchWiz, MIUI, AOSP
 - Sprzętowa grafika przez mostek GL, dźwięk, dotyk i multitouch, sieć z nowoczesnym proxy TLS
 - Wspólny folder karty pamięci na APK, muzykę i zdjęcia
-- Interfejs Material 3 Expressive w 18 językach
+- Interfejs Material 3 Expressive z kartami w stylu Ki, w 18 językach
 - Za darmo i open source (GPL-3.0)
+- AgentPaw — wbudowany asystent AI, który łączy się z uruchomioną maszyną i potrafi importować firmware, zmieniać ustawienia lub odzyskać zawieszony system (dowolny endpoint zgodny z OpenAI)
 
 ## 📱 Lista firmware
 
@@ -39,9 +40,9 @@ Lista sprawdzonych firmware — ze statusami, uwagami i linkami do pobrania — 
 
 ## 🚀 Szybki start
 
-1. Pobierz APK z [Releases](https://github.com/uxazu/aemulator/releases) i zainstaluj.
+1. Pobierz APK z [Releases](https://github.com/TiG-Kira/AndroPaw/releases) i zainstaluj.
 2. Znajdź firmware na [forum](https://aeforum.uxazuu.space/) i pobierz je na telefon.
-3. Otwórz AEmulator → **Dodaj firmware** i wybierz plik. Import trwa kilka minut.
+3. Otwórz AndroPaw → **Dodaj firmware** i wybierz plik. Import trwa kilka minut.
 4. Naciśnij **Uruchom**. Pierwszy start trwa dłużej: system optymalizuje aplikacje.
 5. Menu ⋮ — głośność, przycisk zasilania i dziennik; ⚙️ — ustawienia i język.
 
@@ -60,18 +61,18 @@ Na Androidzie 2.3–4.4 każdy proces gościa działa pod zmodyfikowanym QEMU w 
 Potrzebne są JDK 17, Android SDK 36 i NDK r28. Biblioteki gościa buduje się skryptami `native/*/build.sh`.
 
 ```bash
-git clone https://github.com/uxazu/aemulator.git
-cd aemulator
+git clone https://github.com/TiG-Kira/AndroPaw.git
+cd AndroPaw
 ./gradlew assembleRelease
 ```
 
 ## 🙏 Podziękowania
 
-AEmulator wyrósł z emulatorów HTC Desire HD i HTC One M7 [pierwotnego autora](https://t.me/istratii_tech1) — bez jego silnika tego projektu by nie było.
+AndroPaw wyrósł z emulatorów HTC Desire HD i HTC One M7 [pierwotnego autora](https://t.me/istratii_tech1) — bez jego silnika tego projektu by nie było.
 
 ## 💙 Wesprzyj projekt
 
-Jeśli AEmulator przywrócił ci ulubiony telefon, możesz wesprzeć rozwój:
+Jeśli AndroPaw przywrócił ci ulubiony telefon, możesz wesprzeć rozwój:
 
 - 💳 [dalink.to/uxazu](https://dalink.to/uxazu)
 
@@ -80,7 +81,7 @@ Jeśli AEmulator przywrócił ci ulubiony telefon, możesz wesprzeć rozwój:
 - 🌐 Strona: [aemulator.gt.tc](https://aemulator.gt.tc)
 - 💬 Forum: [aeforum.uxazuu.space](https://aeforum.uxazuu.space/)
 - 📣 Kanał Telegram: [@aemulatorofficial](https://t.me/aemulatorofficial)
-- 👤 Autor: [uxazu](https://github.com/uxazu)
+- 👤 Autor: [TiG-Kira](https://github.com/TiG-Kira)
 - 🧬 Pierwotny autor: [t.me/istratii_tech1](https://t.me/istratii_tech1)
 
 ## 📄 Licencja

@@ -26,9 +26,9 @@ def render(code):
     if code in RTL:
         L.append('<div dir="rtl">\n')
     L.append('<div align="center">\n')
-    L.append(f'<img src="{up}docs/assets/logo.png" width="128" alt="AEmulator logo"/>\n')
-    L.append("# AEmulator\n")
-    L.append("*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*\n")
+    L.append(f'<img src="{up}docs/assets/logo.png" width="128" alt="AndroPaw logo"/>\n')
+    L.append("# AndroPaw\n")
+    L.append("*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*\n")
     L.append(f"**{t['tagline']}**\n")
     L.append(
         f'[![Version](https://img.shields.io/badge/version-{VERSION}-3D5AFE?style=for-the-badge)]({REPO}/releases) '
@@ -61,7 +61,7 @@ def render(code):
     L.append(t["how_text"] + "\n")
     L.append(f"## 🛠️ {t['build_title']}\n")
     L.append(t["build_text"] + "\n")
-    L.append("```bash\ngit clone https://github.com/uxazu/aemulator.git\ncd aemulator\n./gradlew assembleRelease\n```\n")
+    L.append("```bash\ngit clone https://github.com/TiG-Kira/AndroPaw.git\ncd AndroPaw\n./gradlew assembleRelease\n```\n")
     L.append(f"## 🙏 {t['credits_title']}\n")
     L.append(t["credits_text"].format(orig=ORIGINAL) + "\n")
     L.append(f"## 💙 {t['support_title']}\n")
@@ -71,7 +71,7 @@ def render(code):
     L.append(f"- 🌐 {t['l_site']}: [aemulator.gt.tc]({SITE})")
     L.append(f"- 💬 {t['forum']}: [aeforum.uxazuu.space]({FORUM})")
     L.append(f"- 📣 {t['l_channel']}: [@aemulatorofficial]({CHANNEL})")
-    L.append(f"- 👤 {t['l_author']}: [uxazu]({AUTHOR})")
+    L.append(f"- 👤 {t['l_author']}: [TiG-Kira]({AUTHOR})")
     L.append(f"- 🧬 {t['l_orig']}: [t.me/istratii_tech1]({ORIGINAL})\n")
     L.append(f"## 📄 {t['license_title']}\n")
     L.append(t["license_text"] + "\n")

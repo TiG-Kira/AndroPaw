@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="../../docs/assets/logo.png" width="128" alt="AEmulator logo"/>
+<img src="../../docs/assets/logo.png" width="128" alt="AndroPaw logo"/>
 
-# AEmulator
+# AndroPaw
 
-*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
+*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
 
 **Firmware Android cổ điển — HTC Sense, TouchWiz, MIUI, AOSP — trên điện thoại hiện đại. Không root, không cần PC.**
 
-[![Version](https://img.shields.io/badge/version-0.0.0.3-3D5AFE?style=for-the-badge)](https://github.com/uxazu/aemulator/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/uxazu/aemulator) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
+[![Version](https://img.shields.io/badge/version-0.2.0-3D5AFE?style=for-the-badge)](https://github.com/TiG-Kira/AndroPaw/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TiG-Kira/AndroPaw) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
 
 [🇬🇧 English](../../README.md) · [🇷🇺 Русский](README.ru.md) · [🇺🇦 Українська](README.uk.md) · [🇩🇪 Deutsch](README.de.md) · [🇫🇷 Français](README.fr.md) · [🇪🇸 Español](README.es.md) · [🇧🇷 Português](README.pt-BR.md) · [🇮🇹 Italiano](README.it.md) · [🇵🇱 Polski](README.pl.md) · [🇹🇷 Türkçe](README.tr.md) · [🇸🇦 العربية](README.ar.md) · [🇮🇷 فارسی](README.fa.md) · [🇮🇳 हिन्दी](README.hi.md) · [🇮🇩 Indonesia](README.id.md) · **🇻🇳 Tiếng Việt** · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja.md) · [🇰🇷 한국어](README.ko.md)
 
@@ -16,7 +16,7 @@
 
 ---
 
-AEmulator khởi động một hệ thống Android 2.3–17 thật trực tiếp từ tệp firmware: ZIP recovery, gói Odin factory image của Google hoặc GSI. Firmware 32-bit cũ (2.3–4.4) chạy qua QEMU đã chỉnh sửa, Android 5.0–17 chạy trực tiếp trên các nhân arm64 của điện thoại; binder của nhân được giả lập, đồ họa dùng GPU điện thoại và âm thanh đi qua hệ thống âm thanh Android — tất cả trong một ứng dụng bình thường.
+AndroPaw khởi động một hệ thống Android 2.3–17 thật trực tiếp từ tệp firmware: ZIP recovery, gói Odin factory image của Google hoặc GSI. Firmware 32-bit cũ (2.3–4.4) chạy qua QEMU đã chỉnh sửa, Android 5.0–17 chạy trực tiếp trên các nhân arm64 của điện thoại; binder của nhân được giả lập, đồ họa dùng GPU điện thoại và âm thanh đi qua hệ thống âm thanh Android — tất cả trong một ứng dụng bình thường.
 
 ## ✨ Tính năng
 
@@ -24,8 +24,9 @@ AEmulator khởi động một hệ thống Android 2.3–17 thật trực tiế
 - Giao diện hãng chạy nguyên bản: HTC Sense, Samsung TouchWiz, MIUI, AOSP
 - Đồ họa phần cứng qua cầu GL, âm thanh, cảm ứng và đa điểm, mạng với proxy TLS hiện đại
 - Thư mục thẻ nhớ dùng chung cho APK, nhạc và ảnh
-- Giao diện Material 3 Expressive với 18 ngôn ngữ
+- Giao diện Material 3 Expressive với thẻ kiểu Ki, bằng 18 ngôn ngữ
 - Miễn phí và mã nguồn mở (GPL-3.0)
+- AgentPaw — trợ lý AI tích hợp kết nối với máy đang chạy và có thể nhập firmware, thay đổi cài đặt hoặc khôi phục hệ thống bị treo (bất kỳ endpoint tương thích OpenAI)
 
 ## 📱 Danh sách firmware
 
@@ -39,9 +40,9 @@ Danh sách firmware đã kiểm tra — kèm trạng thái, ghi chú và liên k
 
 ## 🚀 Bắt đầu nhanh
 
-1. Tải APK từ [Releases](https://github.com/uxazu/aemulator/releases) và cài đặt.
+1. Tải APK từ [Releases](https://github.com/TiG-Kira/AndroPaw/releases) và cài đặt.
 2. Tìm firmware trên [diễn đàn](https://aeforum.uxazuu.space/) và tải về điện thoại.
-3. Mở AEmulator → **Thêm firmware** và chọn tệp. Việc nhập mất vài phút.
+3. Mở AndroPaw → **Thêm firmware** và chọn tệp. Việc nhập mất vài phút.
 4. Nhấn **Chạy**. Lần khởi động đầu chậm hơn: hệ thống tối ưu ứng dụng.
 5. Menu ⋮ để chỉnh âm lượng, nút nguồn và nhật ký; ⚙️ mở cài đặt và ngôn ngữ.
 
@@ -60,18 +61,18 @@ Trên Android 2.3–4.4 mỗi tiến trình khách chạy dưới QEMU chế đ�
 Cần JDK 17, Android SDK 36 và NDK r28. Thư viện khách được dựng bằng `native/*/build.sh`.
 
 ```bash
-git clone https://github.com/uxazu/aemulator.git
-cd aemulator
+git clone https://github.com/TiG-Kira/AndroPaw.git
+cd AndroPaw
 ./gradlew assembleRelease
 ```
 
 ## 🙏 Ghi công
 
-AEmulator phát triển từ trình giả lập HTC Desire HD và HTC One M7 của [tác giả gốc](https://t.me/istratii_tech1) — không có engine của anh ấy thì không có dự án này.
+AndroPaw phát triển từ trình giả lập HTC Desire HD và HTC One M7 của [tác giả gốc](https://t.me/istratii_tech1) — không có engine của anh ấy thì không có dự án này.
 
 ## 💙 Ủng hộ dự án
 
-Nếu AEmulator mang lại chiếc điện thoại bạn yêu thích, bạn có thể ủng hộ phát triển:
+Nếu AndroPaw mang lại chiếc điện thoại bạn yêu thích, bạn có thể ủng hộ phát triển:
 
 - 💳 [dalink.to/uxazu](https://dalink.to/uxazu)
 
@@ -80,7 +81,7 @@ Nếu AEmulator mang lại chiếc điện thoại bạn yêu thích, bạn có 
 - 🌐 Trang web: [aemulator.gt.tc](https://aemulator.gt.tc)
 - 💬 Diễn đàn: [aeforum.uxazuu.space](https://aeforum.uxazuu.space/)
 - 📣 Kênh Telegram: [@aemulatorofficial](https://t.me/aemulatorofficial)
-- 👤 Tác giả: [uxazu](https://github.com/uxazu)
+- 👤 Tác giả: [TiG-Kira](https://github.com/TiG-Kira)
 - 🧬 Tác giả gốc: [t.me/istratii_tech1](https://t.me/istratii_tech1)
 
 ## 📄 Giấy phép

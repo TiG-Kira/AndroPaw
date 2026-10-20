@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="../../docs/assets/logo.png" width="128" alt="AEmulator logo"/>
+<img src="../../docs/assets/logo.png" width="128" alt="AndroPaw logo"/>
 
-# AEmulator
+# AndroPaw
 
-*Based on the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
+*Based on AEmulator and the original [SENSES emulator](https://github.com/Istratii-tech/SENSES)*
 
 **Старые прошивки Android — HTC Sense, TouchWiz, MIUI, AOSP — на современном телефоне. Без root и без ПК.**
 
-[![Version](https://img.shields.io/badge/version-0.0.0.3-3D5AFE?style=for-the-badge)](https://github.com/uxazu/aemulator/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/uxazu/aemulator) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
+[![Version](https://img.shields.io/badge/version-0.2.0-3D5AFE?style=for-the-badge)](https://github.com/TiG-Kira/AndroPaw/releases) [![License](https://img.shields.io/badge/license-GPL--3.0-3D5AFE?style=for-the-badge)](../../LICENSE) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/TiG-Kira/AndroPaw) [![Forum](https://img.shields.io/badge/Forum-aeforum-FF6D00?style=for-the-badge&logo=discourse&logoColor=white)](https://aeforum.uxazuu.space/) [![Telegram](https://img.shields.io/badge/Telegram-channel-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/aemulatorofficial) [![Website](https://img.shields.io/badge/site-aemulator.gt.tc-111?style=for-the-badge)](https://aemulator.gt.tc)
 
 [🇬🇧 English](../../README.md) · **🇷🇺 Русский** · [🇺🇦 Українська](README.uk.md) · [🇩🇪 Deutsch](README.de.md) · [🇫🇷 Français](README.fr.md) · [🇪🇸 Español](README.es.md) · [🇧🇷 Português](README.pt-BR.md) · [🇮🇹 Italiano](README.it.md) · [🇵🇱 Polski](README.pl.md) · [🇹🇷 Türkçe](README.tr.md) · [🇸🇦 العربية](README.ar.md) · [🇮🇷 فارسی](README.fa.md) · [🇮🇳 हिन्दी](README.hi.md) · [🇮🇩 Indonesia](README.id.md) · [🇻🇳 Tiếng Việt](README.vi.md) · [🇨🇳 简体中文](README.zh-CN.md) · [🇯🇵 日本語](README.ja.md) · [🇰🇷 한국어](README.ko.md)
 
@@ -16,7 +16,7 @@
 
 ---
 
-AEmulator загружает настоящую систему Android 2.3–17 прямо из файла прошивки: ZIP для рекавери, архива Odin или factory-образа Google, а также GSI. Старые 32-битные прошивки (2.3–4.4) идут через доработанный QEMU, Android 5.0–17 — нативно на arm64-ядрах телефона. Binder ядра эмулируется, графика идёт через GPU телефона, звук — через аудиосистему Android. Всё работает внутри обычного приложения.
+AndroPaw загружает настоящую систему Android 2.3–17 прямо из файла прошивки: ZIP для рекавери, архива Odin или factory-образа Google, а также GSI. Старые 32-битные прошивки (2.3–4.4) идут через доработанный QEMU, Android 5.0–17 — нативно на arm64-ядрах телефона. Binder ядра эмулируется, графика идёт через GPU телефона, звук — через аудиосистему Android. Всё работает внутри обычного приложения.
 
 ## ✨ Возможности
 
@@ -24,8 +24,9 @@ AEmulator загружает настоящую систему Android 2.3–17 
 - Оболочки производителей работают как есть: HTC Sense, Samsung TouchWiz, MIUI, AOSP
 - Аппаратная графика через GL-мост, звук, касания и мультитач, сеть с современным TLS-прокси
 - Общая папка «карты памяти» для APK, музыки и фото
-- Интерфейс Material 3 Expressive на 18 языках
+- Интерфейс Material 3 Expressive с карточками в стиле Ki, на 18 языках
 - Бесплатно и с открытым кодом (GPL-3.0)
+- AgentPaw — встроенный ИИ-ассистент, который подключается к запущенной машине и может импортировать прошивку, менять настройки или восстановить зависшую систему (любой endpoint, совместимый с OpenAI)
 
 ## 📱 Список прошивок
 
@@ -39,9 +40,9 @@ AEmulator загружает настоящую систему Android 2.3–17 
 
 ## 🚀 Быстрый старт
 
-1. Скачайте APK из [Releases](https://github.com/uxazu/aemulator/releases) и установите.
+1. Скачайте APK из [Releases](https://github.com/TiG-Kira/AndroPaw/releases) и установите.
 2. Найдите прошивку на [форуме](https://aeforum.uxazuu.space/) и скачайте её на телефон.
-3. Откройте AEmulator → **Добавить прошивку** и выберите файл. Импорт занимает несколько минут.
+3. Откройте AndroPaw → **Добавить прошивку** и выберите файл. Импорт занимает несколько минут.
 4. Нажмите **Запустить**. Первая загрузка дольше: система оптимизирует приложения.
 5. Меню ⋮ — громкость, кнопка питания и журнал; кнопка ⚙️ — настройки приложения и язык.
 
@@ -60,18 +61,18 @@ AEmulator загружает настоящую систему Android 2.3–17 
 Нужны JDK 17, Android SDK 36 и NDK r28. Гостевые библиотеки собираются скриптами `native/*/build.sh`.
 
 ```bash
-git clone https://github.com/uxazu/aemulator.git
-cd aemulator
+git clone https://github.com/TiG-Kira/AndroPaw.git
+cd AndroPaw
 ./gradlew assembleRelease
 ```
 
 ## 🙏 Благодарности
 
-AEmulator вырос из эмуляторов HTC Desire HD и HTC One M7 [первого автора](https://t.me/istratii_tech1) — без его движка проекта бы не было.
+AndroPaw вырос из эмуляторов HTC Desire HD и HTC One M7 [первого автора](https://t.me/istratii_tech1) — без его движка проекта бы не было.
 
 ## 💙 Поддержать проект
 
-Если AEmulator вернул вам любимый телефон, можно поддержать разработку:
+Если AndroPaw вернул вам любимый телефон, можно поддержать разработку:
 
 - 💳 [dalink.to/uxazu](https://dalink.to/uxazu)
 
@@ -80,7 +81,7 @@ AEmulator вырос из эмуляторов HTC Desire HD и HTC One M7 [пе
 - 🌐 Сайт: [aemulator.gt.tc](https://aemulator.gt.tc)
 - 💬 Форум: [aeforum.uxazuu.space](https://aeforum.uxazuu.space/)
 - 📣 Telegram-канал: [@aemulatorofficial](https://t.me/aemulatorofficial)
-- 👤 Автор: [uxazu](https://github.com/uxazu)
+- 👤 Автор: [TiG-Kira](https://github.com/TiG-Kira)
 - 🧬 Первый автор: [t.me/istratii_tech1](https://t.me/istratii_tech1)
 
 ## 📄 Лицензия
