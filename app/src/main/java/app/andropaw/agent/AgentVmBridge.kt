@@ -44,6 +44,13 @@ class AgentVmBridge(
     @Volatile
     var imageId: String? = null
 
+    /**
+     * :vm 进程内的捷径：把 guest 命令直接交给活着的 GuestVm（它的 runner 已热身、
+     * 工具包装已就绪），不再另起一次 qemu-user。主进程不设它，走自建的 runner。
+     */
+    @Volatile
+    var inlineShell: ((cmd: String, timeoutMs: Long) -> Pair<Int, String>)? = null
+
     private fun image(): GuestImage? {
         val id = imageId ?: VmSession.runningId(ctx) ?: return null
         return ImageStore.get(ctx, id)
@@ -74,6 +81,7 @@ class AgentVmBridge(
      * 超时强制杀死；命令经 qemu-user 单次进程执行，与 :vm 里跑 guest 服务同一机制。
      */
     suspend fun guestShell(cmd: String, timeoutMs: Long = 60_000): Pair<Int, String> = withContext(Dispatchers.IO) {
+        inlineShell?.let { return@withContext it(cmd, timeoutMs) }
         val img = image() ?: return@withContext (-1 to "No target machine: start a machine first")
         val paths = VmPaths(ctx, img.id)
         if (!File(paths.root, "system/bin/sh").isFile) {

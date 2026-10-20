@@ -253,6 +253,13 @@
     <string name="agent_test">测试连接</string>
     <string name="agent_reset_prompt">恢复默认提示词</string>
     <string name="agent_prompt_reset">系统提示词已恢复默认</string>
+    <string name="vm_frozen_banner">模拟器已无响应</string>
+    <string name="vm_frozen_restart">强制重启</string>
+    <string name="agent_thinking">深度思考中…</string>
+    <string name="agent_thought">深度思考 · 已完成</string>
+    <string name="agent_tool_running">执行中</string>
+    <string name="agent_tool_done">已完成</string>
+    <string name="agent_tool_failed">失败</string>
     <string name="agent_llm_row">LLM 设置</string>
     <string name="vm_running_badge">运行中</string>
     <string name="m_reset_menu_pos">重置菜单按钮位置</string>

@@ -32,6 +32,8 @@ data class Message(
     val toolCallId: String? = null,
     /** base64 data URLs or http(s) URLs — 只有 user 消息携带截图 */
     val images: List<String> = emptyList(),
+    /** reasoning_content（深度思考）—— 只展示，不回传给模型 */
+    val reasoning: String = "",
     val createdAt: Long = 0L,
 ) {
     val isUser: Boolean get() = role == MessageRole.USER
@@ -44,6 +46,7 @@ data class Message(
         if (toolCalls.isNotEmpty()) put("toolCalls", JSONArray().apply { toolCalls.forEach { c -> put(c.toJson()) } })
         toolCallId?.let { put("toolCallId", it) }
         if (images.isNotEmpty()) put("images", JSONArray().apply { images.forEach { i -> put(i) } })
+        if (reasoning.isNotEmpty()) put("reasoning", reasoning)
         put("createdAt", createdAt)
     }
 

@@ -72,6 +72,8 @@ data class LlmConfig(
 
 sealed interface LlmChunk {
     data class Delta(val text: String) : LlmChunk
+    /** reasoning_content（深度思考模型的思考流） */
+    data class Reasoning(val text: String) : LlmChunk
     data class ToolCalls(val calls: List<ToolCall>) : LlmChunk
     data object Done : LlmChunk
 }
@@ -197,6 +199,7 @@ class OpenAiCompatibleClient : LlmClient {
             root.optJSONObject("error")?.let { throw LlmException(it.optString("message", "API error")) }
             val msg = root.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
                 ?: throw LlmException("Empty response")
+            msg.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Reasoning(it)) }
             msg.optString("content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Delta(it)) }
             msg.optJSONArray("tool_calls")?.let { calls ->
                 val list = (0 until calls.length()).mapNotNull { i ->
@@ -230,6 +233,7 @@ class OpenAiCompatibleClient : LlmClient {
                 chunk.optJSONObject("error")?.let { throw LlmException(it.optString("message", "stream error")) }
                 val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
                 val delta = choice.optJSONObject("delta") ?: continue
+                delta.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Reasoning(it)) }
                 delta.optString("content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Delta(it)) }
                 delta.optJSONArray("tool_calls")?.let { calls ->
                     for (i in 0 until calls.length()) {

@@ -102,6 +102,7 @@ class Agent(
             }
 
             buffer = StringBuilder()
+            val reasoning = StringBuilder()
             val pendingToolCalls = mutableListOf<ToolCall>()
             var failure: Exception? = null
 
@@ -111,7 +112,11 @@ class Agent(
                         when (chunk) {
                             is LlmChunk.Delta -> {
                                 buffer.append(chunk.text)
-                                emit(AgentEvent.AssistantDelta(currentAssistant(buffer, assistantId, MessageStatus.STREAMING)))
+                                emit(AgentEvent.AssistantDelta(currentAssistant(buffer, assistantId, MessageStatus.STREAMING, reasoning = reasoning.toString())))
+                            }
+                            is LlmChunk.Reasoning -> {
+                                reasoning.append(chunk.text)
+                                emit(AgentEvent.AssistantDelta(currentAssistant(buffer, assistantId, MessageStatus.STREAMING, reasoning = reasoning.toString())))
                             }
                             is LlmChunk.ToolCalls -> pendingToolCalls += chunk.calls
                             is LlmChunk.Done -> Unit
@@ -124,12 +129,12 @@ class Agent(
             }
 
             if (failure != null) {
-                emit(AgentEvent.Failed(currentAssistant(buffer, assistantId, MessageStatus.FAILED, failure.message ?: failure::class.simpleName)))
+                emit(AgentEvent.Failed(currentAssistant(buffer, assistantId, MessageStatus.FAILED, failure.message ?: failure::class.simpleName, reasoning = reasoning.toString())))
                 return@flow
             }
 
             if (pendingToolCalls.isEmpty()) {
-                emit(AgentEvent.Completed(currentAssistant(buffer, assistantId, MessageStatus.COMPLETE)))
+                emit(AgentEvent.Completed(currentAssistant(buffer, assistantId, MessageStatus.COMPLETE, reasoning = reasoning.toString())))
                 return@flow
             }
 
@@ -139,7 +144,7 @@ class Agent(
                 return@flow
             }
 
-            val assistantMessage = currentAssistant(buffer, assistantId, MessageStatus.COMPLETE).copy(toolCalls = pendingToolCalls)
+            val assistantMessage = currentAssistant(buffer, assistantId, MessageStatus.COMPLETE, reasoning = reasoning.toString()).copy(toolCalls = pendingToolCalls)
             workingHistory = workingHistory + assistantMessage
             emit(AgentEvent.AssistantTurn(assistantMessage, round + 1))
 
@@ -185,13 +190,14 @@ class Agent(
             )
     }
 
-    private fun currentAssistant(buffer: StringBuilder, id: String?, status: MessageStatus, error: String? = null): Message =
+    private fun currentAssistant(buffer: StringBuilder, id: String?, status: MessageStatus, error: String? = null, reasoning: String = ""): Message =
         Message(
             id = id ?: "streaming-assistant",
             role = MessageRole.ASSISTANT,
             content = buffer.toString(),
             status = status,
             error = error,
+            reasoning = reasoning,
         )
 
     /** 工具结果转成回填给模型的消息；截图结果额外生成一条带图的 user 观察消息。 */

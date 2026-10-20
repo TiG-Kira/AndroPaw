@@ -98,9 +98,11 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
             // 10+: hwservicemanager asks for the service of an interface by the interface's name until it registers;
             // those services are started at boot here
             // (14+: servicemanager starts a lazy AIDL service the same way, as aidl/<name>; that one is not running yet)
-            if (what == "interface_start" && value.startsWith("aidl/")) { onCtl?.invoke(true, value); return }
+            if (what == "interface_start" && value.startsWith("aidl/")) { fireCtl(true, value); return }
             if (what.startsWith("interface_")) return
-            onCtl?.invoke(what == "start" || what == "restart", value) ?: log("props: ctl.$what=$value (no services)")
+            val cb = onCtl
+            if (cb == null) log("props: ctl.$what=$value (no services)")
+            else fire { cb(what == "start" || what == "restart", value) }
             return
         }
         if (name.startsWith("ro.") && get(name) != null) { rejects++; return }
@@ -113,8 +115,21 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
         // persist.* is written to disk off the lock: a synchronous write here (a stall of the shared
         // storage blocks every guest's __system_property_set behind it) once froze whole firmwares
         if (name.startsWith("persist.")) persistQueue.put(name to value)
-        onSet?.invoke(name, value)
+        onSet?.let { cb -> fire { cb(name, value) } }
     }
+
+    /**
+     * The onCtl / onSet hooks run off the apply lock, in order, on their own thread. They do heavy
+     * things — ctl.start parses the init .rc's and spawns a service, sys.powerctl tears the whole
+     * machine down — and while they ran under this monitor, every other guest's setprop queued up
+     * behind them: the guest froze in place until the handler returned. The property area itself is
+     * still updated under the lock; only the observers moved out.
+     */
+    private val hooks = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "props-hooks").apply { isDaemon = true }
+    }
+    private fun fireCtl(start: Boolean, service: String) { onCtl?.let { cb -> fire { cb(start, service) } } }
+    private fun fire(action: () -> Unit) { hooks.execute { runCatching { action() }.onFailure { log("props: hook failed: $it") } } }
 
     /**
      * persist.* land in /data/property like on a real init, but written by one daemon thread with

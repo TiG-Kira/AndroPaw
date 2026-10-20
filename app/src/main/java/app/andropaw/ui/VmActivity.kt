@@ -12,6 +12,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.rounded.BatteryStd
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Cast
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.InstallMobile
@@ -58,6 +60,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -169,6 +173,8 @@ class VmActivity : ComponentActivity() {
     private var resumeCheckPosted = false
     private val uiHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
     private var state by mutableStateOf(GuestVm.State.STOPPED)
+    /** the freeze supervisor's verdict, shown as a quiet banner over the guest screen */
+    private val frozenState = androidx.compose.runtime.mutableStateOf(false)
     /** the guest's notification LED and where the guest screen starts (the LED sits just above it) */
     private var led by mutableStateOf<app.andropaw.core.Lights.Led?>(null)
     /** this system's setting "Notification light" (the settings sheet changes it while the system runs) */
@@ -197,6 +203,7 @@ class VmActivity : ComponentActivity() {
         vm = if (cur != null && cur.img.id == img.id) cur
             else GuestVm(applicationContext, img).also { it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.vm = it }
         vm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+        vm.onFreeze = { f -> runOnUiThread { frozenState.value = f } }
         val s = vm.settings
         showLed = s.showLed
         if (s.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -753,6 +760,15 @@ class VmActivity : ComponentActivity() {
         var menuIcon by remember { mutableStateOf(Rect.Zero) }
         // the page's origin, in root coordinates — the anchor is handed to the panel relative to it
         var menuPageOrigin by remember { mutableStateOf(Offset.Zero) }
+        // AgentPaw floating chat: the entry on the operating page itself. Its shell rides the live
+        // VM's own runner — no second qemu-user start.
+        var agentOpen by remember { mutableStateOf(false) }
+        val agentBridge = remember {
+            app.andropaw.agent.AgentVmBridge(applicationContext, null).apply {
+                imageId = vm.img.id
+                inlineShell = { cmd, t -> vm.guestRunner.run(listOf("/system/bin/sh", "-c", vm.shellPrefix + cmd), t) }
+            }
+        }
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
         ) {
@@ -782,6 +798,37 @@ class VmActivity : ComponentActivity() {
                 }
             }
 
+            // The freeze banner: quiet, non-modal, does not take the whole screen — the staged
+            // recovery is already running underneath; this tells the user and offers the way out
+            // that always works, a cold restart of the machine.
+            AnimatedVisibility(
+                visible = frozenState.value && !showLog && !showTerm,
+                enter = fadeIn() + slideInVertically { -it },
+                exit = fadeOut() + slideOutVertically { -it },
+                modifier = Modifier.align(Alignment.TopCenter).displayCutoutPadding().statusBarsPadding().padding(top = 8.dp),
+            ) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(MiuixTheme.colorScheme.errorContainer.copy(alpha = 0.94f))
+                        .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Rounded.Warning, null, Modifier.size(16.dp), tint = MiuixTheme.colorScheme.error)
+                    Text(stringResource(R.string.vm_frozen_banner), fontSize = 12.sp, color = MiuixTheme.colorScheme.onErrorContainer)
+                    Text(
+                        stringResource(R.string.vm_frozen_restart),
+                        fontSize = 12.sp, fontWeight = FontWeight.Bold,
+                        color = MiuixTheme.colorScheme.error,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { rebootVm() }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
             // журнал
             AnimatedVisibility(visible = showLog, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
                 LogPanel(onClose = { showLog = false })
@@ -793,6 +840,7 @@ class VmActivity : ComponentActivity() {
             // the menu's entries — hoisted: the button and the panel are hosted apart, and the panel
             // is laid out on this box (the page), see at the end of it
             val menuItems = buildList {
+                add(GlassMenuItem(stringResource(R.string.agent_chat_title), Icons.Rounded.AutoAwesome, enabled = running) { agentOpen = true })
                 add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
                 add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
                 // back to the app's home page: the machine keeps running in the :vm process
@@ -878,6 +926,36 @@ class VmActivity : ComponentActivity() {
             // панель кнопок Android
             if (vm.settings.showNavBar && !showLog && !showTerm) {
                 NavBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp))
+            }
+
+            // AgentPaw: a small floating button while it is closed, the chat card when open —
+            // bottom end, above the guest's own nav bar, never covering the middle of the screen
+            if (running && !agentOpen && !showLog && !showTerm) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 12.dp, bottom = 12.dp)
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))
+                        .clickable { agentOpen = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_chat_title),
+                        Modifier.size(20.dp), tint = MiuixTheme.colorScheme.primary)
+                }
+            }
+            if (agentOpen) {
+                app.andropaw.agent.AgentChatOverlay(
+                    bridge = agentBridge,
+                    onDismiss = { agentOpen = false },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .imePadding()
+                        .navigationBarsPadding()
+                        .padding(end = 12.dp, bottom = 12.dp),
+                )
             }
 
             // the panel itself, hosted on the page (this box): it gets the whole overlay as its page,

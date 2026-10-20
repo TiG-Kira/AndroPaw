@@ -252,6 +252,13 @@
     <string name="agent_test">Test connection</string>
     <string name="agent_reset_prompt">Reset system prompt</string>
     <string name="agent_prompt_reset">System prompt restored to default</string>
+    <string name="vm_frozen_banner">Machine is not responding</string>
+    <string name="vm_frozen_restart">Force restart</string>
+    <string name="agent_thinking">Thinking…</string>
+    <string name="agent_thought">Thought process · done</string>
+    <string name="agent_tool_running">Running</string>
+    <string name="agent_tool_done">Done</string>
+    <string name="agent_tool_failed">Failed</string>
     <string name="agent_llm_row">LLM settings</string>
     <string name="vm_running_badge">Running</string>
     <string name="m_reset_menu_pos">Reset menu button</string>

@@ -1128,6 +1128,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     private val freeze = FreezeWatch()
 
+    /**
+     * Frozen(true) when the supervisor first acts on a freeze, frozen(false) when progress resumes.
+     * The screen shows a quiet banner with a hard-restart button on it — the staged recovery keeps
+     * running underneath, this only tells the user what is going on.
+     */
+    @Volatile var onFreeze: ((frozen: Boolean) -> Unit)? = null
+    @Volatile private var frozenAnnounced = false
+
     private fun superviseFreeze() {
         if (stopping || recoveryMode) { freeze.reset(); return }
         if (state != State.RUNNING || screenUpAt == 0L) { freeze.reset(); return }
@@ -1135,7 +1143,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val now = System.currentTimeMillis()
         val progress = props.writes + frames.rings
         if (progress != freeze.lastProgress) {
-            freeze.lastProgress = progress; freeze.lastProgressAt = now; freeze.reset(); return
+            freeze.lastProgress = progress; freeze.lastProgressAt = now; freeze.reset()
+            if (frozenAnnounced) { frozenAnnounced = false; onFreeze?.invoke(false) }
+            return
         }
         if (input.sent != freeze.lastInput) { freeze.lastInput = input.sent; freeze.lastInputAt = now }
         // что-то происходило недавно — иначе это просто покоящаяся машина, а не заморозка
@@ -1147,6 +1157,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         when (freeze.stage) {
             0 -> {
                 freeze.stage = 1; freeze.firedAt = now
+                if (!frozenAnnounced) { frozenAnnounced = true; onFreeze?.invoke(true) }
                 log("⚠ guest looks frozen: no progress for ${quiet / 1000}s " +
                     "(props ${props.writes}, frames ${frames.rings}, input ${input.sent}, alive ${alive().joinToString()}); recycling helpers")
                 recycleHelpers()
@@ -1326,6 +1337,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun stop() {
         if (state == State.STOPPED) return
         stopping = true
+        frozenAnnounced = false
         setState(State.STOPPING)
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
