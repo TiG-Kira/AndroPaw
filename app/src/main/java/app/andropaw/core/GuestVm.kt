@@ -1,6 +1,10 @@
 package app.andropaw.core
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.os.Process as AProcess
 import android.os.SystemClock
 import android.view.Surface
@@ -510,6 +514,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
         runnerRef = r
         Keeper.hold(ctx, img.name)
+        // keep the guest's host-side process tree (`:vm` + its children + the separate `:binder`/`:gl`
+        // helpers) out of the host low-memory killer even when AndroPaw is backgrounded
+        protectProcessTree()
+        Thread({ protectLoop() }, "vm-oom-protect").apply { isDaemon = true; start() }
 
         bootAt = System.currentTimeMillis()
         bootDoneAt = 0
@@ -639,6 +647,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 spawn("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
             } else {
                 Slot.start(ctx, BinderSlot::class.java, listOf("binderd", "-s", sock), emptyMap(), paths.log("binderd"))
+                keepForeground(BinderSlot::class.java)
                 log("· binderd started (:binder service)")
             }
         }
@@ -1126,6 +1135,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         fun reset() { since = 0L; stage = 0 }
     }
 
+    /** false while VmActivity is backgrounded / its surface is gone: a frozen guest there is expected (no
+     * frames are delivered), so the freeze watchdog must not kill it — backgrounding is not a crash. */
+    @Volatile private var uiVisible = true
+    fun setUiVisible(v: Boolean) { uiVisible = v }
+
     private val freeze = FreezeWatch()
 
     /**
@@ -1139,6 +1153,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun superviseFreeze() {
         if (stopping || recoveryMode) { freeze.reset(); return }
         if (state != State.RUNNING || screenUpAt == 0L) { freeze.reset(); return }
+        if (!uiVisible) { freeze.reset(); return }
         if (File(paths.bin, "freeze.guard.off").isFile) return
         val now = System.currentTimeMillis()
         val progress = props.writes + frames.rings
@@ -1192,6 +1207,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         log("freeze: recycled $killed helper process(es)")
         runCatching { startBinder() }
         runCatching { spawnGl() }
+        protectProcessTree()
     }
 
     /** the GL bridge spawn of [glUp], kept apart so [recycleHelpers] can repeat it verbatim */
@@ -1211,6 +1227,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 Slot.start(ctx, GlSlot::class.java,
                     listOf("glserverd", "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath, "-w", "$w", "-h", "$h"),
                     emptyMap(), paths.log("glserverd"))
+                keepForeground(GlSlot::class.java)
             }
             Engine.KK -> {
                 spawn("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
@@ -1226,6 +1243,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         private const val FREEZE_QUIET_MS = 90_000L
         /** between the recovery stages */
         private const val FREEZE_STAGE_GAP_MS = 45_000L
+        /** floor of oom_score_adj: a process pinned here is never selected by the host low-memory killer */
+        private const val PROTECTED_OOM_ADJ = -1000
     }
     /**
      * Ставит политику AOSP 4.3 за обёрткой: родная сохраняется, лишние потоки производителя
@@ -1346,6 +1365,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
         Keeper.release(ctx)
+        runCatching { binderKeep?.let { ctx.unbindService(it) }; glKeep?.let { ctx.unbindService(it) } }
+        binderKeep = null; glKeep = null
         setState(State.STOPPED)
     }
 
@@ -1375,6 +1396,80 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     }
 
     // ------------------------------------------------------------------ служебное
+
+    /**
+     * Pin the guest's host-side process tree to the floor of oom_score_adj so the host low-memory
+     * killer never reaps it when AndroPaw is backgrounded. The VM lives in `:vm`, held by the Keeper
+     * foreground service, but `:binder` and `:gl` are separate processes with no foreground service of
+     * their own — and the guest's zygote/surfaceflinger/system_server are children of `:vm`. Without
+     * this, backgrounding the app (and pulling the host notification shade, which spikes host memory)
+     * lets the host LMK kill `:binder`/`:gl` first; their binder/GL bridges die and the guest reboots
+     * with code 137 → (1/12). Root is required to write a negative adj; if it fails we just log it.
+     */
+    private fun protectProcessTree() {
+        val mine = AProcess.myPid()
+        writeOomScore(mine, PROTECTED_OOM_ADJ)
+        File("/proc").listFiles()?.forEach { d ->
+            val pid = d.name.toIntOrNull() ?: return@forEach
+            if (pid == mine) return@forEach
+            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
+            val isHelper = cmd.startsWith("${ctx.packageName}:binder") || cmd.startsWith("${ctx.packageName}:gl")
+            val isGuestChild = !isHelper && runCatching { File(d, "status").readLines() }.getOrNull()
+                ?.firstOrNull { it.startsWith("PPid:") }
+                ?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull() == mine
+            if (isHelper || isGuestChild) writeOomScore(pid, PROTECTED_OOM_ADJ)
+        }
+    }
+
+    /** root-only: a negative oom_score_adj needs CAP_SYS_RESOURCE. On non-root hosts this silently
+     * fails and we fall back to foreground-service importance (BIND_FOREGROUND_SERVICE) instead. */
+    @Volatile private var oomUnsupported = false
+
+    private fun writeOomScore(pid: Int, adj: Int) {
+        runCatching {
+            val fd = android.system.Os.open("/proc/$pid/oom_score_adj", android.system.OsConstants.O_WRONLY, 0)
+            try {
+                val b = adj.toString().toByteArray()
+                android.system.Os.write(fd, b, 0, b.size)
+            } finally { android.system.Os.close(fd) }
+        }.onFailure {
+            if (!oomUnsupported) {
+                oomUnsupported = true
+                log("oom: cannot pin oom_score_adj (needs root); relying on foreground-service importance on this host")
+            }
+        }
+    }
+
+    /** Re-pin the guest process tree every few seconds so freshly spawned helpers stay protected. */
+    private fun protectLoop() {
+        while (!stopping && state != State.STOPPED) {
+            runCatching { protectProcessTree() }
+            Thread.sleep(5_000)
+        }
+    }
+
+    /**
+     * Non-root-safe keep-alive for the guest's helper processes that run in their own Android service
+     * processes (`:binder`/`:gl`, the GB engine). They have no foreground service of their own, so when
+     * AndroPaw is backgrounded the host low-memory killer reaps them first. Binding from this `:vm` process
+     * — which runs the Keeper foreground service — with BIND_FOREGROUND_SERVICE lifts their importance to
+     * foreground, exactly like Keeper does for `:vm`. Root hosts additionally get the oom_score_adj pin above.
+     */
+    private var binderKeep: ServiceConnection? = null
+    private var glKeep: ServiceConnection? = null
+    private fun keepForeground(cls: Class<out Any>) {
+        val conn = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {}
+            override fun onServiceDisconnected(name: ComponentName?) {}
+        }
+        val intent = Intent(ctx, cls)
+        // BIND_FOREGROUND_SERVICE = 0x40, BIND_AUTO_CREATE = 0x1. Use literals: the SDK const combined via
+        // `or` trips the K2 constant evaluator (INITIALIZER_TYPE_MISMATCH / BigInteger) on some compile targets.
+        val flags = 0x40 or 0x1
+        val ok: Boolean = runCatching { ctx.bindService(intent, conn, flags) }.getOrDefault(false)
+        if (ok) { if (cls == BinderSlot::class.java) binderKeep = conn else glKeep = conn }
+        else log("keep: ${cls.simpleName} not bound (already running or not found)")
+    }
 
     fun bootSeconds(): Long = if (bootAt == 0L) 0 else ((if (bootDoneAt > 0) bootDoneAt else System.currentTimeMillis()) - bootAt) / 1000
 

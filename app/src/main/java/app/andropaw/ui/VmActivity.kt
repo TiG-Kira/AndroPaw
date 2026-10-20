@@ -370,6 +370,7 @@ class VmActivity : ComponentActivity() {
         super.onResume()
         if (!::vm.isInitialized) return
         vm.sensors.resume(true)
+        vm.setUiVisible(true)
         // coming back from the home page or from another app: the window's surface was destroyed
         // while we were away, so make sure the bridge holds the one that is on screen now (a
         // create that landed while the activity was stopping is easy to miss)
@@ -414,7 +415,7 @@ class VmActivity : ComponentActivity() {
     }
 
     override fun onPause() {
-        if (::vm.isInitialized) vm.sensors.resume(false)
+        if (::vm.isInitialized) { vm.sensors.resume(false); vm.setUiVisible(false) }
         super.onPause()
     }
 
