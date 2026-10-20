@@ -82,6 +82,10 @@ interface LlmClient {
     fun complete(config: LlmConfig, request: JSONObject): Flow<LlmChunk>
 }
 
+/** org.json 的 optString 在值为 JSON null 时返回 "null" 字符串——思考模型的 delta 每条都带 "content": null */
+private fun JSONObject.realText(key: String): String? =
+    if (!has(key) || isNull(key)) null else getString(key).takeIf { it.isNotEmpty() }
+
 class LlmException(message: String) : Exception(message)
 
 /** 把会话历史 + 工具表组装成 chat-completions 请求体。 */
@@ -199,8 +203,8 @@ class OpenAiCompatibleClient : LlmClient {
             root.optJSONObject("error")?.let { throw LlmException(it.optString("message", "API error")) }
             val msg = root.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
                 ?: throw LlmException("Empty response")
-            msg.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Reasoning(it)) }
-            msg.optString("content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Delta(it)) }
+            (msg.realText("reasoning_content") ?: msg.realText("reasoning"))?.let { emit(LlmChunk.Reasoning(it)) }
+            msg.realText("content")?.let { emit(LlmChunk.Delta(it)) }
             msg.optJSONArray("tool_calls")?.let { calls ->
                 val list = (0 until calls.length()).mapNotNull { i ->
                     calls.optJSONObject(i)?.let { c ->
@@ -223,6 +227,7 @@ class OpenAiCompatibleClient : LlmClient {
         val ids = LinkedHashMap<Int, String>()
         val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
         try {
+
             while (true) {
                 val line = reader.readLine() ?: break
                 if (!line.startsWith("data:")) continue
@@ -233,8 +238,8 @@ class OpenAiCompatibleClient : LlmClient {
                 chunk.optJSONObject("error")?.let { throw LlmException(it.optString("message", "stream error")) }
                 val choice = chunk.optJSONArray("choices")?.optJSONObject(0) ?: continue
                 val delta = choice.optJSONObject("delta") ?: continue
-                delta.optString("reasoning_content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Reasoning(it)) }
-                delta.optString("content").takeIf { it.isNotEmpty() }?.let { emit(LlmChunk.Delta(it)) }
+                (delta.realText("reasoning_content") ?: delta.realText("reasoning"))?.let { emit(LlmChunk.Reasoning(it)) }
+                delta.realText("content")?.let { emit(LlmChunk.Delta(it)) }
                 delta.optJSONArray("tool_calls")?.let { calls ->
                     for (i in 0 until calls.length()) {
                         val c = calls.optJSONObject(i) ?: continue

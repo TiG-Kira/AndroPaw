@@ -80,6 +80,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -712,6 +715,32 @@ private fun toolTitle(name: String): String =
     name.removePrefix("vm_").removePrefix("guest_").replace('_', ' ')
         .replaceFirstChar { it.uppercase() }
 
+/** 轻量 markdown：**粗体** 与 `代码`，其余原样——对话输出不再满屏星号 */
+private fun markdownText(text: String): AnnotatedString = buildAnnotatedString {
+    text.lines().forEachIndexed { li, line ->
+        if (li > 0) append(10.toChar())
+        var rest = line
+        val t = line.trimStart()
+        if (t.startsWith("#")) { rest = t.trimStart('#').trim() }
+        var i = 0
+        while (i < rest.length) {
+            when {
+                rest.startsWith("**", i) -> {
+                    val end = rest.indexOf("**", i + 2)
+                    if (end > 0) { pushStyle(SpanStyle(fontWeight = FontWeight.Bold)); append(rest.substring(i + 2, end)); pop(); i = end + 2 }
+                    else { append(rest[i]); i++ }
+                }
+                rest[i] == '`' -> {
+                    val end = rest.indexOf('`', i + 1)
+                    if (end > 0) { pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)); append(rest.substring(i + 1, end)); pop(); i = end + 1 }
+                    else { append(rest[i]); i++ }
+                }
+                else -> { append(rest[i]); i++ }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AgentBubble(m: Message, toolsById: Map<String, ToolCall> = emptyMap()) {
     // 截图观察消息：user 角色 + 带图
@@ -764,7 +793,7 @@ private fun AgentBubble(m: Message, toolsById: Map<String, ToolCall> = emptyMap(
                         modifier = Modifier.fillMaxWidth(0.86f),
                         insideMargin = PaddingValues(12.dp),
                     ) {
-                        if (m.content.isNotBlank()) Text(m.content, fontSize = 15.sp)
+                        if (m.content.isNotBlank()) Text(markdownText(m.content), fontSize = 15.sp)
                         if (m.status == MessageStatus.STREAMING) {
                             Spacer(Modifier.height(4.dp))
                             Text("…", fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
