@@ -170,7 +170,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val qemu = paths.nativeBin(if (is64) kernel.runner else Engine.KK.qemu)
         if (!is64 && !(img.settings.native32 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
         killLeftovers()
-        bindBridgeHost()          // zygote 由 :bridge 前台服务承载（只保护 zygote）
         HostNative.limitStackSafe()
         TreeFixer(ctx, paths, img, ::log).fixup()   // framebuffer, input node
         val sd = Sdcard.setup(ctx, paths, img, ::log)
@@ -603,6 +602,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 glUp(); glDone = true
             }
             // 10+: the package manager requires apexd's binder service, which is there once apexd reports "ready"
+            if (svc.name == "zygote") checkFirmwareIntegrity()   // zygote 启动前先验货，缺文件一次说清
             if (svc.name == "zygote" && engine == Engine.N64 && plan.any { it.name == "apexd" })
                 waitFor("apexd", 15_000) { props.get("apexd.status") == "ready" }
             // 4.2+: заглушка bluetooth_manager до зиготы (system_server с ro.kernel.qemu=1 свою не поднимает)
@@ -1203,7 +1203,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             continue@wd
                         }
                         if (state != State.FAILED && bootDoneAt == 0L && !(everBooted && zygoteRestarts < 6)) {
-                            failure = "$name exited (code $code)" + if (code == 137) " — killed: the phone ran out of memory, or system_server died and took zygote with it (see the guest log)" else ""
+                            val missing = runCatching { checkFirmwareIntegrity() }.getOrDefault(emptyList())
+                            failure = "$name exited (code $code)" + if (code == 137) {
+                                if (missing.isNotEmpty())
+                                    " — firmware is incomplete (${missing.size} key file(s) missing, see the host log); the guest shut its own VM down"
+                                else
+                                    " — system_server died while zygote was execing it and the guest shut the VM down (see the guest log)"
+                            } else ""
                             if (code == 137 && guestLogHas("No original dex files found"))
                                 failure = "system_server cannot start: the precompiled code of the framework (system/framework/oat) is missing from this container — import the firmware again"
                             log("✖ $failure"); setState(State.FAILED)
@@ -1356,6 +1362,47 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
     }
 
+    /**
+     * 固件完整性检查：logcat 里 "Zygote died while execing system server" + 成批 service died
+     * 之后直接 Shutting down VM —— 这是 guest 自己缺文件/坏文件的连锁崩溃，不是外部清理。
+     * 在 zygote 启动前把缺的关键文件一次说清。
+     */
+    private fun checkFirmwareIntegrity(): List<String> {
+        val root = paths.root
+        val api = img.api
+        val is64 = engine == Engine.N64
+        val dir = if (is64) "lib64" else "lib"
+        val needed = mutableListOf(
+            "$root/system/bin/app_process",
+            "$root/system/bin/linker",
+            "$root/system/bin/linker64",
+            "$root/system/$dir/libc.so",
+            "$root/system/build.prop",
+        )
+        // Dalvik 需要预编译 boot 镜像；ART 固件用 oat
+        if (api < 21) {
+            needed += listOf(
+                "$root/system/framework/arm/boot.art",
+                "$root/system/framework/arm/boot.oat",
+            ).filter { File(root, "system/framework/arm").isDirectory }
+        } else {
+            val oatDir = if (File(root, "system/framework/arm64").isDirectory) "arm64" else "arm"
+            needed += "$root/system/framework/$oatDir/boot.art"
+        }
+        // framework 主 jar
+        needed += "$root/system/framework/framework.jar"
+        needed += "$root/system/framework/services.jar"
+        val missing = needed.filter { !File(it).isFile }
+        if (missing.isNotEmpty()) {
+            log("firmware incomplete - missing ${missing.size} key file(s):")
+            missing.take(12).forEach { log("   ! ${it.removePrefix(root.absolutePath)}") }
+            if (missing.size > 12) log("   ... and ${missing.size - 12} more")
+        } else {
+            log("firmware integrity: ok (all key files present)")
+        }
+        return missing
+    }
+
     /** guest adb 端口（每台机器固定，adb 客户端直连 127.0.0.1:port） */
     val adbPort: Int get() = 5555
 
@@ -1467,9 +1514,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     //  - zygote 是系统的根，父进程有前台身份才可能整棵被 ROM 放过
     // 其余服务一律走原本逻辑（:vm 本地 spawn，由 guest init 自己管理重启）——
     // 全交给 bridge 会和 guest init 双重管理，表现为反复 down → rebuild。
-    // 只把 zygote 交给 :bridge 前台服务承载（FGS 保护）。桥进程与其它服务一律本地 spawn：
-    // 桥走 bridge 会触发"拉桥→唤醒→掉→再拉"的无限循环，把能启动的固件也拖垮。
-    private val CORE_VIA_BRIDGE = setOf("zygote")
+    // 桥已拆：IPC 调用总是落回本地 spawn，:bridge 没有带来保护反而添乱。
+    private val CORE_VIA_BRIDGE: Set<String> = emptySet()
 
     /** boot 期 zygote 重建次数 */
     @Volatile private var zygoteBootTries = 0
