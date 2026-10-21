@@ -27,6 +27,8 @@
     <!-- 电源优化豁免：MIUI 等系统的后台清理会按 uid 扫掉模拟器子进程（成批 code 137） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
         android:usesCleartextTraffic="true"
         android:name=".AndroPawApp"
@@ -41,6 +43,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AndroPaw"
         tools:targetApi="28">
+    <!-- 桥进程承载进程（:bridge）：独立进程 + 前台服务，ROM 的后台清理跳过前台进程，
+         桥进程才不会被扫掉（否则 guest 的 binder/GL 桥一断，整个系统跟着崩） -->
+    <service
+        android:name="app.andropaw.core.BridgeHostService"
+        android:process=":bridge"
+        android:exported="false"
+        android:foregroundServiceType="specialUse">
+        <property
+            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+            android:value="模拟器桥进程承载（binderd/glserverd 被系统清理会导致 guest 崩溃）" />
+    </service>
+
 
         <activity
             android:name=".ui.MainActivity"

@@ -170,6 +170,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val qemu = paths.nativeBin(if (is64) kernel.runner else Engine.KK.qemu)
         if (!is64 && !(img.settings.native32 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
         killLeftovers()
+        bindBridgeHost()          // 桥进程迁到独立 FGS 进程 :bridge 承载（治本：ROM 清理扫不掉）
         HostNative.limitStackSafe()
         TreeFixer(ctx, paths, img, ::log).fixup()   // framebuffer, input node
         val sd = Sdcard.setup(ctx, paths, img, ::log)
@@ -652,20 +653,20 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun startBinder() {
         val sock = paths.binderSock.absolutePath
         when (engine) {
-            Engine.KK -> spawn("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, "-s", sock), emptyMap())
+            Engine.KK -> spawnBridge("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, "-s", sock), emptyMap())
             Engine.N64 -> {
                 val env = if (File(paths.bin, "binder.verbose").exists()) mapOf("AEMU_BINDER_VERBOSE" to "1") else emptyMap()
                 val bin = paths.nativeBin(kernel.binderd).absolutePath
-                spawn("binderd", listOf(bin, sock), env)
+                spawnBridge("binderd", listOf(bin, sock), env)
                 if (kernel.treble) {
-                    spawn("hwbinderd", listOf(bin, paths.hwbinderSock.absolutePath), env)
-                    spawn("vndbinderd", listOf(bin, paths.vndbinderSock.absolutePath), env)
+                    spawnBridge("hwbinderd", listOf(bin, paths.hwbinderSock.absolutePath), env)
+                    spawnBridge("vndbinderd", listOf(bin, paths.vndbinderSock.absolutePath), env)
                     log("· Treble hwbinder and vndbinder daemons started")
                 }
             }
             Engine.GB -> if (File(paths.bin, "binderd.kk").exists()) {
                 // эксперимент: более новый binderd движка KK
-                spawn("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
+                spawnBridge("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
             } else {
                 Slot.start(ctx, BinderSlot::class.java, listOf("binderd", "-s", sock), emptyMap(), paths.log("binderd"))
                 keepForeground(BinderSlot::class.java)
@@ -1113,6 +1114,21 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     }
                     seenGuestPids.clear(); seenGuestPids.addAll(nowSet)
                 }
+                // ---- watchdog L2：桥进程（:bridge 承载，AIDL 查询）----
+                // 桥断 = guest 全崩，单独死就立刻重建，不等批量
+                runCatching {
+                    for (bn in listOf("binderd", "hwbinderd", "vndbinderd", "glserverd")) {
+                        if (bridgeAlive(bn)) continue
+                        val now = System.currentTimeMillis()
+                        log("watchdog: bridge $bn is down (host-side) — rebuilding")
+                        sweepExitTimes.addLast(now)
+                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
+                        if (now - lastBridgeRespawnAt > 10_000) {
+                            lastBridgeRespawnAt = now
+                            spawnSpecs[bn]?.let { sp -> spawnBridge(bn, sp.first, sp.second) }
+                        }
+                    }
+                }
                 // 死前体检：zygote/system_server 的 pid、RSS、adj。被宿主 lmkd 杀时，最后一条
                 // 记录就是"尸体数据"，能直接判断是不是"只认它大"（RSS 越高越可疑）
                 runCatching {
@@ -1334,6 +1350,64 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** 上一轮扫到的 guest 进程 pid（procs 表之外的兜底：zygote fork 的应用、HIDL HAL、system_server） */
     private val seenGuestPids = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Int, Boolean>())
 
+    /** 桥进程承载进程（:bridge，独立 FGS）。桥进程由它 spawn，才拥有前台身份。 */
+    @Volatile private var bridgeHost: android.os.Messenger? = null
+    private val bridgeConn = object : android.content.ServiceConnection {
+        override fun onServiceConnected(name: android.content.ComponentName?, service: IBinder?) {
+            bridgeHost = android.os.Messenger(service)
+            log("bridge host: connected (bridges now run under a foreground service)")
+        }
+        override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
+    }
+
+    /** 绑定桥承载进程；失败时退化为本地 spawn（功能不变，只是失去前台保护） */
+    private fun bindBridgeHost() {
+        val it = android.content.Intent(ctx, BridgeHostService::class.java)
+        runCatching {
+            ctx.bindService(it, bridgeConn, android.content.Context.BIND_AUTO_CREATE or 0x00000040)
+        }
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(it) else ctx.startService(it)
+        }
+    }
+
+    /** 同步调用桥宿主，返回 reply 的 arg1（超时/失败 -1） */
+    private fun bridgeCall(what: Int, b: android.os.Bundle? = null): Int {
+        val m = bridgeHost ?: return -1
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val out = intArrayOf(-1)
+        val reply = android.os.Messenger(android.os.Handler(android.os.Looper.getMainLooper()) { msg ->
+            out[0] = msg.arg1; latch.countDown(); true
+        })
+        val msg = android.os.Message.obtain(null, what).apply {
+            if (b != null) data = b
+            replyTo = reply
+        }
+        val sent: Boolean = runCatching { m.send(msg) }.isSuccess
+        if (!sent) return -1
+        runCatching { latch.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+        return out[0]
+    }
+
+    /** 桥进程走 :bridge 承载（有 FGS 身份）；未绑定则本地兜底 */
+    private fun spawnBridge(name: String, cmd: List<String>, env: Map<String, String>) {
+        val b = android.os.Bundle().apply {
+            putString("name", name)
+            putStringArray("argv", cmd.toTypedArray())
+            putStringArray("env", env.map { "${it.key}=${it.value}" }.toTypedArray())
+            putString("cwd", paths.bin.absolutePath)
+            putString("log", paths.log(name).absolutePath)
+        }
+        val pid = bridgeCall(1, b)
+        if (pid > 0) { log("· $name started (bridge host pid=$pid)"); return }
+        log("· $name: bridge host unavailable, local spawn")
+        spawn(name, cmd, env)
+    }
+
+    /** watchdog L2：桥进程存活查询（它们在 :bridge 里，不在 procs 表） */
+    private fun bridgeAlive(name: String): Boolean =
+        bridgeCall(3, android.os.Bundle().apply { putString("name", name) }) == 1
+
     /** 临时状态快照：最近一次正常时的前台包名（恢复后自动拉回来） */
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
@@ -1342,6 +1416,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastSoftRebootAt = 0L
     /** zygote 单独重建的防抖 */
     @Volatile private var lastZygoteRespawnAt = 0L
+    /** 桥进程重建防抖 */
+    @Volatile private var lastBridgeRespawnAt = 0L
 
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
     private val respawnTried = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
@@ -1601,7 +1677,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         when (engine) {
             Engine.N64 -> {
                 if (kernel.gpuBridge32 != null && n64Has32) {
-                    spawn("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
+                    spawnBridge("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
                         "-s", paths.glSock.absolutePath, "-fb", File(paths.bin, "gl32.fb").absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
                 }
             }
@@ -1612,7 +1688,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 keepForeground(GlSlot::class.java)
             }
             Engine.KK -> {
-                spawn("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
+                spawnBridge("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
                     "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath,
                     "-notify", paths.frameSock.absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
             }
