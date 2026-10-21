@@ -93,18 +93,46 @@ class AgentVmBridge(
         if (!File(paths.root, "system/bin/sh").isFile) {
             return@withContext (-1 to "Firmware tree is not ready")
         }
-        val prefix = "export PATH=/system/bin:/system/xbin:\$PATH; ${toolWrappers(paths)}"
-        val runner = GuestRunner(paths, img)
-        // 打开 qemu 日志：信号 11 这类崩溃只有 qemu 自己的 stderr 能说明原因（缺库/非法指令/…）
-        runner.qemuLog = true
-        val (code, out) = runner.run(listOf("/system/bin/sh", "-c", prefix + cmd), timeoutMs)
-        if (code != 0 && out.contains("signal 11")) {
-            // 附上 qemu 的日志尾部，下一次失败就能直接看到真正的原因
-            val logTail = runCatching {
-                File(paths.bin, "qemu-sh.log").readLines().takeLast(12).joinToString(" | ")
-            }.getOrDefault("")
-            return@withContext (code to (out + (if (logTail.isNotBlank()) " [qemu] " + logTail else "")))
+        // 所有技能走 adb：guest adbd 监听 TCP，与宿主同一网络栈（qemu-user），127.0.0.1 直连。
+        // （QEMU 直跑 guest 二进制在这类宿主上会 signal 11，已弃用。）
+        adbShell(cmd, timeoutMs)?.let { return@withContext it }
+        (-1 to "adb path failed - is the guest adbd running?")
+    }
+
+    /** 解压内置 adb 客户端（引擎资源里的 aarch64 版） */
+    private fun ensureAdb(): java.io.File? {
+        val f = java.io.File(ctx.filesDir, "adb")
+        if (!f.isFile || f.length() < 100_000) {
+            runCatching {
+                app.andropaw.core.EngineAssets.open(ctx, "engines/common/adb").use { i ->
+                    f.outputStream().use { o -> i.copyTo(o) }
+                }
+                f.setExecutable(true)
+            }
         }
+        return if (f.isFile && f.length() > 100_000) f else null
+    }
+
+    @Volatile private var adbConnected = false
+
+    /** 通过 adb 在 guest 里执行命令；失败返回 null */
+    private suspend fun adbShell(cmd: String, timeoutMs: Long): Pair<Int, String>? = withContext(Dispatchers.IO) {
+        val adb = ensureAdb() ?: return@withContext null
+        val dev = "127.0.0.1:5555"
+        if (!adbConnected) {
+            val c = runCatching {
+                val p = ProcessBuilder(adb.absolutePath, "connect", dev).redirectErrorStream(true).start()
+                p.inputStream.bufferedReader().readText()
+                p.waitFor() to ""
+            }
+            adbConnected = c.isSuccess
+        }
+        val pb = ProcessBuilder(adb.absolutePath, "-s", dev, "shell", cmd)
+        pb.redirectErrorStream(true)
+        val p = runCatching { pb.start() }.getOrNull() ?: return@withContext null
+        val out = runCatching { p.inputStream.bufferedReader().readText() }.getOrDefault("")
+        val code = runCatching { p.waitFor(timeoutMs / 1000, java.util.concurrent.TimeUnit.SECONDS); p.exitValue() }.getOrDefault(-1)
+        if (code == -1) runCatching { p.destroyForcibly() }
         code to out
     }
 

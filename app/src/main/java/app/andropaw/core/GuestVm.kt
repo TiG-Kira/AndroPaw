@@ -274,6 +274,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             else File(paths.bin, "SwiftShader.ini").writeText("[Processor]\nThreadCount=${Runtime.getRuntime().availableProcessors().coerceIn(1, 8)}\n")
         }
         killLeftovers()
+        bindBridgeHost()          // 正常启动也要绑定：zygote 由此获得前台身份
         HostNative.limitStackSafe()
 
         // 1. дерево
@@ -897,6 +898,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             bootDoneAt = System.currentTimeMillis()
             everBooted = true
             lmk?.armed = true   // boot 完成后才允许 GuestLmk 回收后台进程
+            startGuestAdbd()    // Agent 技能改走 adb：guest adbd 监听 TCP，宿主 127.0.0.1 直连
             clearRebootNotice()
             log("★ system booted in ${(bootDoneAt - bootAt) / 1000} s")
             setState(State.RUNNING)
@@ -1352,6 +1354,41 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             log("bridge host: connected (bridges now run under a foreground service)")
         }
         override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
+    }
+
+    /** guest adb 端口（每台机器固定，adb 客户端直连 127.0.0.1:port） */
+    val adbPort: Int get() = 5555
+
+    /**
+     * 启动 guest 的 adbd 并开 TCP 监听。qemu-user 的进程与宿主共享同一个网络栈，
+     * 所以 adbd 监听的就是宿主的 127.0.0.1:<port>，宿主 adb 客户端可直接 connect。
+     * （Agent 的所有技能都走这条路——QEMU 直跑 guest 二进制在这类宿主上会 signal 11。）
+     */
+    private fun startGuestAdbd() {
+        runCatching {
+            val root = paths.root
+            val adbd = listOf("$root/system/bin/adbd", "$root/sbin/adbd").firstOrNull { File(it).canExecute() }
+                ?: run {
+                    log("adb: guest adbd not found - skills will use the local shell path")
+                    return
+                }
+            runCatching { props.put("persist.adb.tcp.port", adbPort.toString()) }
+            runCatching { props.put("service.adb.tcp.port", adbPort.toString()) }
+            // adbd 已跑就不重复起
+            val alive = File("/proc").listFiles()?.any { d ->
+                d.name.toIntOrNull() != null && runCatching {
+                    String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1)
+                }.getOrNull()?.contains("adbd") == true
+            } ?: false
+            if (alive) { log("adb: adbd already running on port $adbPort"); return }
+            spawn("adbd", listOf(adbd), mapOf(
+                "PATH" to "/system/bin:/system/xbin",
+                "ANDROID_ROOT" to "/system",
+                "ANDROID_DATA" to "/data",
+                "LD_LIBRARY_PATH" to "/system/lib:/vendor/lib",
+            ))
+            log("adb: adbd started, TCP port $adbPort (host connects 127.0.0.1:$adbPort)")
+        }
     }
 
     /** 绑定桥承载进程：同步等待 + 重试。异步绑定会让 zygote 在连上之前就走本地 spawn（无前台身份） */
