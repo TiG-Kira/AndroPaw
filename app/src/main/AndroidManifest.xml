@@ -24,6 +24,9 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- 电源优化豁免：MIUI 等系统的后台清理会按 uid 扫掉模拟器子进程（成批 code 137） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:usesCleartextTraffic="true"
         android:name=".AndroPawApp"

@@ -203,6 +203,7 @@ class VmActivity : ComponentActivity() {
         vm = if (cur != null && cur.img.id == img.id) cur
             else GuestVm(applicationContext, img).also { it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.vm = it }
         vm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+        requestIgnoreBatteryOptimizationsOnce()
         vm.onFreeze = { f -> runOnUiThread { frozenState.value = f } }
         val s = vm.settings
         showLed = s.showLed
@@ -415,7 +416,11 @@ class VmActivity : ComponentActivity() {
     }
 
     override fun onPause() {
-        if (::vm.isInitialized) { vm.sensors.resume(false); vm.setUiVisible(false) }
+        if (::vm.isInitialized) {
+            vm.sensors.resume(false); vm.setUiVisible(false)
+            // 宿主切后台后 MIUI 的清理通常几秒内就到：先立刻刷一遍 oom pin 抢时间窗
+            runCatching { vm.reprotectNow() }
+        }
         super.onPause()
     }
 
@@ -425,6 +430,18 @@ class VmActivity : ComponentActivity() {
         if (::guest.isInitialized) guest.stop()
         shellRx?.let { runCatching { unregisterReceiver(it) } }
         super.onDestroy()
+    }
+
+    /** 一次性的电池优化豁免请求：MIUI/ColorOS 的后台清理会扫掉模拟器的子进程，系统级豁免是最有效的一层 */
+    private fun requestIgnoreBatteryOptimizationsOnce() {
+        runCatching {
+            val prefs = getSharedPreferences("vm", MODE_PRIVATE)
+            if (prefs.getBoolean("asked_batt_opt", false)) return
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm != null && pm.isIgnoringBatteryOptimizations(packageName)) return
+            prefs.edit().putBoolean("asked_batt_opt", true).apply()
+            startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName")))
+        }
     }
 
     private fun stopVm() {

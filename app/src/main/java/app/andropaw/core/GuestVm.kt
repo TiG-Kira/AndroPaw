@@ -1103,13 +1103,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     if (code == 137) {
                         val now = System.currentTimeMillis()
                         sweepExitTimes.addLast(now)
-                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 4000) sweepExitTimes.removeFirst()
-                        if (sweepExitTimes.size >= 4) {
+                        // 窗口收紧到 2.5 秒 / 3 个：MIUI 一失焦就清后台，早一步识别早一步自救
+                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
+                        if (sweepExitTimes.size >= 3) {
                             if (!sweepRebootTried) {
                                 sweepRebootTried = true
                                 sweepExitTimes.clear()
                                 log("✖ mass SIGKILL (≥4 processes in 4 s) — the guest is shutting itself down; cold-rebooting the machine once")
-                                writeRebootNotice("检测到 guest 系统发起关机（进程成批死亡），已阻止并正在冷重启模拟器…")
+                                writeRebootNotice("检测到 guest 进程成批被杀（MIUI 等系统的后台清理会按 uid 扫掉模拟器子进程），正在冷重启模拟器…\n\n建议：把 AndroPaw 设为「无限制/不省电」，并在最近任务里锁定，可避免反复发生。")
                                 onPower?.invoke(true, "")
                                 break@wd
                             }
@@ -1463,8 +1464,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * lets the host LMK kill `:binder`/`:gl` first; their binder/GL bridges die and the guest reboots
      * with code 137 → (1/12). Root is required to write a negative adj; if it fails we just log it.
      */
+    @Volatile private var lastPinned = -1
+
     private fun protectProcessTree() {
         val mine = AProcess.myPid()
+        var pinned = 0
         writeOomScore(mine, PROTECTED_OOM_ADJ)
         // 先读整张 PPid 表，再沿祖先链收全部后代：guest 的 init 是 :vm 的直接子进程，
         // 但 zygote/system_server/应用全是 init 的（孙）后代——只保直接子进程等于没保 zygote。
@@ -1491,7 +1495,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             if (pid == mine) return@forEach
             val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             val isHelper = cmd.startsWith("${ctx.packageName}:binder") || cmd.startsWith("${ctx.packageName}:gl")
-            if (isHelper || descendants.contains(pid)) writeOomScore(pid, PROTECTED_OOM_ADJ)
+            if (isHelper || descendants.contains(pid)) { writeOomScore(pid, PROTECTED_OOM_ADJ); pinned++ }
+        }
+        // 让 pin 的结果可见：成功 N 个 / 失败说明被 SELinux 或宿主策略拦了（那时只能靠系统白名单）
+        if (pinned != lastPinned) {
+            lastPinned = pinned
+            log("oom: pinned $pinned guest process(es) at $PROTECTED_OOM_ADJ" + if (oomUnsupported) " (some writes refused — host policy)" else "")
         }
     }
 
@@ -1515,6 +1524,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     }
 
     /** Re-pin the guest process tree every few seconds so freshly spawned helpers stay protected. */
+    /** 立刻刷一遍 oom pin（切后台前调用：MIUI 的清理通常就在失焦后的几秒内发生） */
+    fun reprotectNow() { runCatching { protectProcessTree() } }
+
     private fun protectLoop() {
         while (!stopping && state != State.STOPPED) {
             runCatching { protectProcessTree() }
