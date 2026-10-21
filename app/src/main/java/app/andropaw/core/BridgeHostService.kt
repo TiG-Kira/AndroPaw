@@ -81,8 +81,17 @@ class BridgeHostService : Service() {
         val n = Notification.Builder(this, "bridge-host")
             .setContentTitle("模拟器运行中").setContentText("正在承载 binder / GL 桥进程")
             .setSmallIcon(android.R.drawable.stat_notify_sync).setOngoing(true).build()
-        if (android.os.Build.VERSION.SDK_INT >= 34) startForeground(2, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        else startForeground(2, n)
+        // 不用带类型的 startForeground：specialUse 是 API 34 的类型常量，非 API 34 宿主上传了会抛
+        // IllegalArgumentException 直接把 Service 打崩（表现为"bridge host unavailable"）。
+        // API 24+ 一律用两参数版（合法且不崩）；失败的降级为普通常驻 service。
+        // API 34+ 才认 specialUse 类型；低版本宿主必须用两参数版，否则抛 IllegalArgumentException
+        // 直接把 Service 打崩（表现为 "bridge host unavailable"）。两级兜底保证 Service 一定起得来。
+        var ok = runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 34) startForeground(2, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            else startForeground(2, n)
+        }.isSuccess
+        if (!ok) ok = runCatching { startForeground(2, n) }.isSuccess
+        if (!ok) runCatching { startService(android.content.Intent(this, BridgeHostService::class.java)) }
     }
 
     override fun onBind(intent: Intent?): IBinder = messenger.binder

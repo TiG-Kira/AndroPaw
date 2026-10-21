@@ -1192,6 +1192,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     val p = synchronized(procs) { procs[name] } ?: continue
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
+                        // boot 期被宿主扫掉是常态（本地 spawn 无前台身份时尤其）：先重建，3 次都失败才判失败
+                        if (bootDoneAt == 0L && zygoteBootTries < 3 && code == 137) {
+                            zygoteBootTries++
+                            log("zygote died during boot (code " + code + ") - rebuilding (" + zygoteBootTries + "/3)")
+                            Thread({
+                                runCatching {
+                                    killGuestPrograms(); Thread.sleep(500); cleanStaleSockets()
+                                    spawnSpecs["zygote"]?.let { sp -> spawnBridge("zygote", sp.first, sp.second) }
+                                }
+                            }, "zygote-boot-rebuild").apply { isDaemon = true; start() }
+                            continue@wd
+                        }
                         if (state != State.FAILED && bootDoneAt == 0L && !(everBooted && zygoteRestarts < 6)) {
                             failure = "$name exited (code $code)" + if (code == 137) " — killed: the phone ran out of memory, or system_server died and took zygote with it (see the guest log)" else ""
                             if (code == 137 && guestLogHas("No original dex files found"))
@@ -1365,15 +1377,27 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
     }
 
-    /** 绑定桥承载进程；失败时退化为本地 spawn（功能不变，只是失去前台保护） */
+    /** 绑定桥承载进程：同步等待 + 重试。异步绑定会让 zygote 在连上之前就走本地 spawn（无前台身份） */
     private fun bindBridgeHost() {
         val it = android.content.Intent(ctx, BridgeHostService::class.java)
         runCatching {
-            ctx.bindService(it, bridgeConn, android.content.Context.BIND_AUTO_CREATE or 0x00000040)
-        }
-        runCatching {
             if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(it) else ctx.startService(it)
         }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val probe = object : android.content.ServiceConnection {
+            override fun onServiceConnected(name: android.content.ComponentName?, service: IBinder?) {
+                bridgeHost = android.os.Messenger(service); latch.countDown()
+            }
+            override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
+        }
+        repeat(4) { attempt ->
+            runCatching { ctx.bindService(it, probe, android.content.Context.BIND_AUTO_CREATE or 0x00000040) }
+            if (latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                log("bridge host: connected (attempt " + (attempt + 1) + ") - bridges + core services run under a foreground service")
+                return
+            }
+        }
+        log("bridge host: unreachable after 4 attempts - falling back to local spawn")
     }
 
     /** 同步调用桥宿主，返回 reply 的 arg1（超时/失败 -1） */
@@ -1428,6 +1452,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         "installd", "netd", "keystore", "mediaserver", "drmserver",
     )
 
+    /** boot 期 zygote 重建次数 */
+    @Volatile private var zygoteBootTries = 0
     /** 桥进程重建防抖 */
     @Volatile private var lastBridgeRespawnAt = 0L
 
@@ -1831,6 +1857,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         sweepRebootTried = false
         lastSoftRebootAt = 0L
         lastZygoteRespawnAt = 0L
+        zygoteBootTries = 0
         fastRecoveryUntil = 0L
         clearRebootNotice()
         setState(State.STOPPING)
