@@ -712,6 +712,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             is64(img.services.firstOrNull { it.name == "zygote" }?.argv?.firstOrNull()) &&
             File(paths.root, "system/bin/app_process32").isFile)
             svc0.copy(argv = listOf("/system/bin/app_process32") + svc0.argv.drop(1)) else svc0
+        // 厂商（尤其高通）的冗余守护进程：模拟器里没有对应硬件，它们要么空转要么直接崩
+        // （4.4 实测 qcomsysd 255 / rfs_access 1），却实打实占内存、把宿主 lmkd 逼到杀 zygote
+        if (svc0.name in VENDOR_SKIP) {
+            log("· ${svc0.name}: vendor daemon, skipped (no hardware behind it)")
+            return
+        }
         if (!File(paths.root, svc.argv.first().removePrefix("/")).isFile) {
             log("· ${svc.name}: ${svc.argv.first()} missing, skipping")
             return
@@ -756,6 +762,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     /** 核心进程的启动参数表：批量死亡后据此原样重建，而不是等 guest init / framework 的整机重启 */
     private val spawnSpecs = java.util.concurrent.ConcurrentHashMap<String, Pair<List<String>, Map<String, String>>>()
+
+    /** 无对应硬件的厂商守护进程：起不来或空转，只会吃内存（4.4/6.0 的 zygote 被 OOM 杀就是它们挤出来的） */
+    private val VENDOR_SKIP = setOf(
+        "qcomsysd", "rfs_access", "fdpp", "msqasd", "dpmpd", "atfwd", "imsqmidaemon",
+        "displayfeature", "loc_launcher", "mm-pp-daemon", "qcom-cnd", "thermal-engine",
+    )
 
     private fun spawn(name: String, cmd: List<String>, env: Map<String, String>) {
         spawnSpecs[name] = cmd to env
