@@ -1090,6 +1090,29 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             wd@ while (!stopping) {
                 Thread.sleep(3000)
                 runCatching { protectProcessTree() }
+                // 兜底扫描：procs 表只覆盖我们 spawn 的进程。zygote fork 出的应用、HIDL HAL、
+                // system_server 死掉时表里没有记录，watchdog 就"无反应"。这里扫 /proc 对比
+                // 上一轮，成批消失的 guest 进程同样计入 sweep（日志显示批量 137 却不触发的真因）。
+                runCatching {
+                    val nowSet = HashSet<Int>()
+                    val ours = HashSet<Int>()
+                    File("/proc").listFiles()?.forEach { d ->
+                        val pid = d.name.toIntOrNull() ?: return@forEach
+                        val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace(0.toChar(), ' ') }.getOrNull() ?: return@forEach
+                        val guest = cmd.contains("/system/bin/") || cmd.contains("/system/xbin/") ||
+                            cmd.contains("/vendor/bin/") || cmd.contains("/images/") ||
+                            cmd.contains("libaemu64") || cmd.contains("libqemu")
+                        if (guest) { nowSet.add(pid); if (procs.values.any { runCatching { pidOf(it) }.getOrNull() == pid }) ours.add(pid) }
+                    }
+                    val vanished = seenGuestPids - nowSet - ours
+                    if (vanished.isNotEmpty() && seenGuestPids.isNotEmpty()) {
+                        val now = System.currentTimeMillis()
+                        log("watchdog: ${vanished.size} untracked guest process(es) vanished: ${vanished.take(8)}")
+                        repeat(vanished.size) { sweepExitTimes.addLast(now) }
+                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
+                    }
+                    seenGuestPids.clear(); seenGuestPids.addAll(nowSet)
+                }
                 // 死前体检：zygote/system_server 的 pid、RSS、adj。被宿主 lmkd 杀时，最后一条
                 // 记录就是"尸体数据"，能直接判断是不是"只认它大"（RSS 越高越可疑）
                 runCatching {
@@ -1308,6 +1331,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** 集群死亡自救已用过：冷重启兜底只做一次 */
     @Volatile private var sweepRebootTried = false
     private val sweepExitTimes = ArrayDeque<Long>()
+    /** 上一轮扫到的 guest 进程 pid（procs 表之外的兜底：zygote fork 的应用、HIDL HAL、system_server） */
+    private val seenGuestPids = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Int, Boolean>())
 
     /** 临时状态快照：最近一次正常时的前台包名（恢复后自动拉回来） */
     @Volatile private var lastForegroundPkg: String? = null
