@@ -194,8 +194,8 @@ fun AgentHomeContent(
     if (pendingDeleteId != null) {
         MiuixDialog(
             show = true,
-            title = stringResource(R.string.delete),
-            summary = stringResource(R.string.delete_text, pendingDeleteId ?: "", ""),
+            title = stringResource(R.string.delete_conversation_title),
+            summary = stringResource(R.string.delete_conversation_summary),
             onDismissRequest = { pendingDeleteId = null },
         ) {
             Row {
@@ -361,7 +361,7 @@ fun AgentChatScreen(
                 MiuixDialog(
                     show = true,
                     title = stringResource(R.string.agent_menu_clear),
-                    summary = stringResource(R.string.agent_menu_clear),
+                    summary = stringResource(R.string.clear_conversation_summary),
                     onDismissRequest = { showClearConfirm = false },
                 ) {
                     Row {

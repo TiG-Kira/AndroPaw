@@ -105,6 +105,14 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
             else fire { cb(what == "start" || what == "restart", value) }
             return
         }
+        if (name == "sys.powerctl") {
+            // 策略：一律不允许 guest 发起 orderly shutdown（成批 code 137）。powerctl 不写入
+            // 共享属性区——guest init 的关机触发器收不到，只能由宿主侧干净地执行电源动作
+            //（onSet → GuestVm.powerRequest → onPower）。guest 里的"关机"仍然有效，只是由我们代办。
+            writes++
+            onSet?.let { cb -> fire { cb(name, value) } }
+            return
+        }
         if (name.startsWith("ro.") && get(name) != null) { rejects++; return }
         if (!put(name, value)) {
             rejects++

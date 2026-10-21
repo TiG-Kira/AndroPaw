@@ -260,6 +260,10 @@
     <string name="agent_tool_running">执行中</string>
     <string name="agent_tool_done">已完成</string>
     <string name="agent_tool_failed">失败</string>
+    <string name="delete_conversation_title">删除对话</string>
+    <string name="delete_conversation_summary">将删除该对话的全部消息，此操作不可撤销。</string>
+    <string name="clear_conversation_summary">将删除当前对话的全部消息，此操作不可撤销。</string>
+    <string name="reboot_notice_title">正在重启模拟器</string>
     <string name="agent_llm_row">LLM 设置</string>
     <string name="vm_running_badge">运行中</string>
     <string name="m_reset_menu_pos">重置菜单按钮位置</string>

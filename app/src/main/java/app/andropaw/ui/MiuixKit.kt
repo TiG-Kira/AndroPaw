@@ -17,8 +17,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -301,5 +310,27 @@ fun GlassMenuButton(
                 }
             }
         }
+    }
+}
+
+
+/** 机器级重启的跨 Activity 提示：:vm 写 filesDir/reboot_notice.json，冷重启完成即清除，本对话框随通知存在 */
+@Composable
+fun RebootNoticeHost() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var reason by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        val f = java.io.File(ctx.filesDir, "reboot_notice.json")
+        while (true) {
+            reason = runCatching {
+                val o = org.json.JSONObject(f.readText())
+                val at = o.optLong("at", 0)
+                if (System.currentTimeMillis() - at in 0..(5 * 60_000)) o.optString("reason").ifEmpty { null } else null
+            }.getOrNull()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    reason?.let { r ->
+        MiuixDialog(show = true, title = "正在重启模拟器", summary = r, onDismissRequest = {}) {}
     }
 }

@@ -771,6 +771,7 @@ class VmActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(Unit) { app.andropaw.agent.ChatSession.attach(applicationContext, agentBridge) }
+        app.andropaw.ui.RebootNoticeHost()
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
         ) {

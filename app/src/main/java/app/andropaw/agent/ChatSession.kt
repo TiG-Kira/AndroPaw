@@ -38,6 +38,8 @@ object ChatSession {
     private var generationJob: Job? = null
 
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+    /** 已删除的会话 id：流式收尾的 persist 不得把它们重建回来 */
+    private val deletedIds = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
     fun onChange(l: () -> Unit) { listeners.add(l) }
     fun offChange(l: () -> Unit) { listeners.remove(l) }
     private fun notifyChange() { listeners.forEach { runCatching { it() } } }
@@ -47,9 +49,10 @@ object ChatSession {
 
     private fun persist(ctx: Context) {
         val id = activeId ?: return
+        if (id in deletedIds) return
         runCatching {
             val conv = conversations.firstOrNull { it.id == id } ?: AiConversation(id = id)
-            val updated = conv.copy(messages = messages.toList(), updatedAt = System.currentTimeMillis())
+            val updated = conv.copy(messages = snapshot(), updatedAt = System.currentTimeMillis())
             File(dir(ctx), "$id.json").writeText(JSONObject().put("conversation", convToJson(updated)).toString())
             val i = conversations.indexOfFirst { it.id == id }
             if (i >= 0) conversations[i] = updated else conversations.add(updated)
@@ -114,9 +117,15 @@ object ChatSession {
     }
 
     fun deleteConversation(ctx: Context, id: String) {
+        deletedIds.add(id)
         conversations.removeAll { it.id == id }
         runCatching { File(dir(ctx), "$id.json").delete() }
-        if (activeId == id) { activeId = null; messages.clear() }
+        // 删的是活跃会话且正在生成 → 停掉，否则流式收尾的 persist 会把它重建回来
+        if (activeId == id) {
+            if (generationJob?.isActive == true) { cancelled = true; generationJob?.cancel() }
+            activeId = null
+            synchronized(messages) { messages.clear() }
+        }
         notifyChange()
     }
 
@@ -150,6 +159,15 @@ object ChatSession {
         generationJob = scope.launch {
             try {
                 processAiTurn(ctx, b, text)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户停止：正常路径
+            } catch (e: Exception) {
+                synchronized(messages) {
+                    messages.add(ChatMessage(
+                        id = "err" + System.currentTimeMillis() + "_" + (Math.random()*1e6).toInt(),
+                        role = "assistant",
+                        content = "⚠️ 内部错误：${e.message ?: e::class.simpleName}", isWarning = true))
+                }
             } finally {
                 isLoading = false
                 persist(ctx)

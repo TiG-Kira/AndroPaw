@@ -259,6 +259,10 @@
     <string name="agent_tool_running">Running</string>
     <string name="agent_tool_done">Done</string>
     <string name="agent_tool_failed">Failed</string>
+    <string name="delete_conversation_title">Delete conversation</string>
+    <string name="delete_conversation_summary">All messages in this conversation will be lost. This cannot be undone.</string>
+    <string name="clear_conversation_summary">The current conversation will be deleted. This cannot be undone.</string>
+    <string name="reboot_notice_title">Restarting the emulator</string>
     <string name="agent_llm_row">LLM settings</string>
     <string name="vm_running_badge">Running</string>
     <string name="m_reset_menu_pos">Reset menu button</string>

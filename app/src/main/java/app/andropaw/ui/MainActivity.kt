@@ -216,6 +216,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     /** the AgentPaw execution channel: guest commands ride the QEMU path, no host-device control */
     val agentBridge = remember { app.andropaw.agent.AgentVmBridge(ctx.applicationContext, model) }
     LaunchedEffect(Unit) { app.andropaw.agent.ChatSession.attach(ctx.applicationContext, agentBridge) }
+    // 机器级重启提示（:vm 的 watchdog 写入，跨 Activity 显示到冷重启完成）
+    app.andropaw.ui.RebootNoticeHost()
 
     // the machine the :vm process keeps running in the background (null: none), polled while the
     // home page is on screen — the card of that machine shows "running" and resumes it on tap

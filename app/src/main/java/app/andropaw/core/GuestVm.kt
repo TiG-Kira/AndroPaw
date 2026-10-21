@@ -238,7 +238,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }.start()
         Thread {
             val code = runCatching { p.waitFor() }.getOrDefault(-1)
-            if (stopping || powerHandled) return@Thread
+            if (stopping) return@Thread
             log("recovery exited (code $code), booting the system")
             onPower?.invoke(true, "")
         }.start()
@@ -792,11 +792,16 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     /** Guest asked to reboot / power off ("reboot", "reboot,recovery", "shutdown"); the UI restarts or stops the VM. */
     @Volatile var onPower: ((reboot: Boolean, reason: String) -> Unit)? = null
-    @Volatile private var powerHandled = false
+    @Volatile private var lastPowerCtl = ""
+    @Volatile private var lastPowerCtlAt = 0L
 
     private fun powerRequest(v: String) {
-        if (powerHandled || v.isEmpty()) return
-        powerHandled = true
+        if (v.isEmpty()) return
+        // 去重：同值 5 秒内只处理一次（旧实现是一次性闩锁，后续请求全被静默吞掉）
+        val now = System.currentTimeMillis()
+        if (v == lastPowerCtl && now - lastPowerCtlAt < 5000) return
+        lastPowerCtl = v
+        lastPowerCtlAt = now
         val reboot = v.startsWith("reboot")
         val reason = v.substringAfter(',', "")
         log("guest requested ${if (reboot) "reboot" else "power off"}${if (reason.isNotEmpty()) " ($reason)" else ""}")
@@ -843,6 +848,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if ((k == "sys.boot_completed" || k == "dev.bootcomplete") && v == "1" && bootDoneAt == 0L) {
             bootDoneAt = System.currentTimeMillis()
             everBooted = true
+            clearRebootNotice()
             log("★ system booted in ${(bootDoneAt - bootAt) / 1000} s")
             setState(State.RUNNING)
             Thread { afterBoot() }.start()
@@ -1073,6 +1079,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 if (!zygoteRebootTried && bootDoneAt > 0) {
                                     zygoteRebootTried = true
                                     log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — rebooting the whole machine once before giving up")
+                                    writeRebootNotice("系统核心进程反复崩溃，正在冷重启模拟器…")
                                     onPower?.invoke(true, "")
                                     break@wd
                                 }
@@ -1102,6 +1109,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 sweepRebootTried = true
                                 sweepExitTimes.clear()
                                 log("✖ mass SIGKILL (≥4 processes in 4 s) — the guest is shutting itself down; cold-rebooting the machine once")
+                                writeRebootNotice("检测到 guest 系统发起关机（进程成批死亡），已阻止并正在冷重启模拟器…")
                                 onPower?.invoke(true, "")
                                 break@wd
                             }
@@ -1175,6 +1183,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var sweepRebootTried = false
     private val sweepExitTimes = ArrayDeque<Long>()
 
+    /** 机器级重启的跨 Activity 提示（主页面与模拟器页都轮询这个文件） */
+    private fun writeRebootNotice(reason: String) {
+        runCatching {
+            File(ctx.filesDir, "reboot_notice.json").writeText(
+                org.json.JSONObject().put("reason", reason).put("at", System.currentTimeMillis()).toString())
+        }
+    }
+
+    private fun clearRebootNotice() {
+        runCatching { File(ctx.filesDir, "reboot_notice.json").delete() }
+    }
+
     /**
      * Frozen(true) when the supervisor first acts on a freeze, frozen(false) when progress resumes.
      * The screen shows a quiet banner with a hard-restart button on it — the staged recovery keeps
@@ -1218,6 +1238,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             else -> {
                 freeze.stage = 3; freeze.firedAt = now
                 log("⚠ still frozen; rebooting the VM (was recoverable only by a restart before)")
+                writeRebootNotice("检测到模拟器无响应，正在自动冷重启…")
                 onPower?.invoke(true, "")
             }
         }
@@ -1392,6 +1413,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         frozenAnnounced = false
         zygoteRebootTried = false
         sweepRebootTried = false
+        clearRebootNotice()
         setState(State.STOPPING)
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
