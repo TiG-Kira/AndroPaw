@@ -1301,7 +1301,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         File("/proc").listFiles()?.any { d ->
             d.name.toIntOrNull() != null && runCatching {
                 String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1)
-            }.getOrNull()?.contains("/$name") == true
+            }.getOrNull()?.let { c ->
+                c.contains("/$name") || c.contains("$name ") || (name == "zygote" && c.contains("zygote"))
+            } == true
         } ?: false
 
     /** 记录前台应用：每隔一段时间跑一次 dumpsys，集群死亡后据此把用户拉回原来的界面 */
