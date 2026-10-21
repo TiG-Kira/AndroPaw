@@ -867,6 +867,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if ((k == "sys.boot_completed" || k == "dev.bootcomplete") && v == "1" && bootDoneAt == 0L) {
             bootDoneAt = System.currentTimeMillis()
             everBooted = true
+            lmk?.armed = true   // boot 完成后才允许 GuestLmk 回收后台进程
             clearRebootNotice()
             log("★ system booted in ${(bootDoneAt - bootAt) / 1000} s")
             setState(State.RUNNING)
