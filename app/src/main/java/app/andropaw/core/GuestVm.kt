@@ -1195,13 +1195,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 // 而只重启 zygote、不 reboot 系统；这里等它把 zygote/sf 拉回来再恢复前台
                                 Thread({
                                     val deadline = System.currentTimeMillis() + 40_000
+                                    runCatching { respawnCore() }
                                     while (System.currentTimeMillis() < deadline) {
                                         // 日志证据：冻结 30 秒后全机只剩 2 个 guest 进程——init 试过几次
                                         // 就放弃（服务被标记 disabled），不会再拉起。它不干，我们自己拉起。
-                                        // 只补 sf+zygote 是不够的（日志：pinned 5 个进程、画面冻结）：
-                                        // 没有 servicemanager/netd/installd 就没有 system_server，没有 WindowManager
-                                        // 就没有窗口与输入分发——必须按依赖顺序重建整套核心服务
-                                        runCatching { respawnCore() }
+                                        // 只补 sf+zygote 不够（pinned 5、画面冻结）：需要整套核心服务。
+                                        // 但只能重建一次——放进循环里会每 3 秒 spawn 一批，进程数暴涨（43→78）
+                                        // 且 aemu-bt 反复 SIGSEGV，guest 状态被打烂（am 段错误）
                                         val coreReady = guestProcAlive("zygote") &&
                                             guestProcAlive("surfaceflinger") && guestProcAlive("system_server")
                                         if (coreReady) {
@@ -1310,13 +1310,16 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastRecoveryAt = 0L
 
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
+    private val respawnTried = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+
     private fun respawnCore() {
         val order = listOf("binderd", "hwbinderd", "vndbinderd", "servicemanager", "surfaceflinger",
-            "keystore", "installd", "netd", "drmserver", "mediaserver", "bootanim", "fmradio", "aemu-bt", "zygote")
+            "keystore", "installd", "netd", "drmserver", "mediaserver", "bootanim", "fmradio", "zygote")
         var n = 0
         for (name in order) {
             if (stopping) return
             if (guestProcAlive(name)) continue
+            if (!respawnTried.add(name)) continue   // 本机生命周期内只重建一次，绝不无限重启
             val spec = spawnSpecs[name] ?: continue
             runCatching { spawn(name, spec.first, spec.second); n++ }
                 .onFailure { log("respawn $name failed: ${it.message}") }
