@@ -777,8 +777,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private val spawnSpecs = java.util.concurrent.ConcurrentHashMap<String, Pair<List<String>, Map<String, String>>>()
 
     /** 无对应硬件的厂商守护进程：起不来或空转，只会吃内存（4.4/6.0 的 zygote 被 OOM 杀就是它们挤出来的） */
+    // 注意：qmuxd / rfs_access / qcomsysd 不能跳——它们创建 /dev/socket/qmux_radio/* 等 QMI socket，
+    // 跳掉后 loc/gsiff/gpsone 整条位置链报 "No such file or directory" 起不来（0.4.0 的回归）。
     private val VENDOR_SKIP = setOf(
-        "qcomsysd", "rfs_access", "fdpp", "msqasd", "dpmpd", "atfwd", "imsqmidaemon",
+        "fdpp", "msqasd", "dpmpd", "atfwd", "imsqmidaemon",
         "displayfeature", "loc_launcher", "mm-pp-daemon", "qcom-cnd", "thermal-engine",
     )
 
