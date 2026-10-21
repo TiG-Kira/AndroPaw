@@ -1038,7 +1038,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         runCatching { power.writeText(""); power.setWritable(true, false) }
         Thread({
             var restarts = HashMap<String, Int>()
-            while (!stopping) {
+            wd@ while (!stopping) {
                 Thread.sleep(3000)
                 // keep the session marker fresh: the home page and the AgentPaw page follow it, and
                 // a :vm process killed by the system stops beating, so the marker expires by itself
@@ -1069,6 +1069,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             while (zygoteCrashes.isNotEmpty() && zygoteCrashes.first() < now - 600_000) zygoteCrashes.removeFirst()
                             val recentCrashesIn1Min = zygoteCrashes.count { it >= now - 60_000 }
                             if (recentCrashesIn1Min >= 5 || zygoteCrashes.size > 6) {
+                                // 到阈值先整机重启一次（冷启动往往能救回反复崩的系统），再崩才放弃
+                                if (!zygoteRebootTried && bootDoneAt > 0) {
+                                    zygoteRebootTried = true
+                                    log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — rebooting the whole machine once before giving up")
+                                    onPower?.invoke(true, "")
+                                    break@wd
+                                }
                                 failure = "system keeps crashing: $name exited $recentCrashesIn1Min times in 1 min (${zygoteCrashes.size} times in 10 min, last code $code)"
                                 log("✖ $failure"); setState(State.FAILED)
                             } else {
@@ -1141,6 +1148,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun setUiVisible(v: Boolean) { uiVisible = v }
 
     private val freeze = FreezeWatch()
+
+    /** zygote 反复崩时的一次性整机自救已用过 */
+    @Volatile private var zygoteRebootTried = false
 
     /**
      * Frozen(true) when the supervisor first acts on a freeze, frozen(false) when progress resumes.
@@ -1357,6 +1367,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (state == State.STOPPED) return
         stopping = true
         frozenAnnounced = false
+        zygoteRebootTried = false
         setState(State.STOPPING)
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
@@ -1409,20 +1420,37 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun protectProcessTree() {
         val mine = AProcess.myPid()
         writeOomScore(mine, PROTECTED_OOM_ADJ)
+        // 先读整张 PPid 表，再沿祖先链收全部后代：guest 的 init 是 :vm 的直接子进程，
+        // 但 zygote/system_server/应用全是 init 的（孙）后代——只保直接子进程等于没保 zygote。
+        val ppidOf = HashMap<Int, Int>()
+        File("/proc").listFiles()?.forEach { d ->
+            val pid = d.name.toIntOrNull() ?: return@forEach
+            val ppid = runCatching { File(d, "status").readLines() }.getOrNull()
+                ?.firstOrNull { it.startsWith("PPid:") }
+                ?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull() ?: return@forEach
+            ppidOf[pid] = ppid
+        }
+        val descendants = HashSet<Int>()
+        for (pid in ppidOf.keys) {
+            var cur = pid
+            var hops = 0
+            while (hops++ < 16) {
+                if (cur == mine) { descendants.add(pid); break }
+                cur = ppidOf[cur] ?: break
+                if (cur <= 0) break
+            }
+        }
         File("/proc").listFiles()?.forEach { d ->
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == mine) return@forEach
             val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             val isHelper = cmd.startsWith("${ctx.packageName}:binder") || cmd.startsWith("${ctx.packageName}:gl")
-            val isGuestChild = !isHelper && runCatching { File(d, "status").readLines() }.getOrNull()
-                ?.firstOrNull { it.startsWith("PPid:") }
-                ?.split(Regex("\\s+"))?.getOrNull(1)?.toIntOrNull() == mine
-            if (isHelper || isGuestChild) writeOomScore(pid, PROTECTED_OOM_ADJ)
+            if (isHelper || descendants.contains(pid)) writeOomScore(pid, PROTECTED_OOM_ADJ)
         }
     }
 
-    /** root-only: a negative oom_score_adj needs CAP_SYS_RESOURCE. On non-root hosts this silently
-     * fails and we fall back to foreground-service importance (BIND_FOREGROUND_SERVICE) instead. */
+    /** 写别的进程的 oom_score_adj 只要求能 signal 它（同 uid 即可）——guest 进程与 :vm 同 uid，
+     * 所以非 root 宿主上这一 pin 同样生效；真失败（SELinux 拦截等）记一次日志后静默继续。 */
     @Volatile private var oomUnsupported = false
 
     private fun writeOomScore(pid: Int, adj: Int) {

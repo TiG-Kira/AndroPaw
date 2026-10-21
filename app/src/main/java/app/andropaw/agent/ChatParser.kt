@@ -33,8 +33,8 @@ object ChatParser {
             }
         }
 
-        // 策略 2: 行业标准 <tool_call> XML
-        val toolCallPattern = Regex("""<tool_call>([\s\S]*?)</tool_call>""", RegexOption.DOT_MATCHES_ALL)
+        // 策略 2: 行业标准 <tool_call> XML；宽容处理没写闭合标签的块（写到回复末尾）
+        val toolCallPattern = Regex("""<tool_call>([\s\S]*?)(?:</tool_call>|(?=<tool_call>)|$)""", RegexOption.DOT_MATCHES_ALL)
         val namePattern = Regex("""<tool_name>\s*([\s\S]*?)\s*</tool_name>""", RegexOption.DOT_MATCHES_ALL)
         val paramPattern = Regex("""<parameter\s+name\s*=\s*["']([^"']+)["']\s*>([\s\S]*?)</parameter>""", RegexOption.DOT_MATCHES_ALL)
         for (match in toolCallPattern.findAll(content)) {
@@ -67,6 +67,32 @@ object ChatParser {
             sb.append('|').append(key).append('=').append(params.optString(key))
         }
         return sb.toString()
+    }
+
+    /**
+     * 回复清洗：模型（尤其 mimo/qwen 系）经常在技能块后面喷出一串孤儿闭合标签
+     * （</invoke></parameter></antml:function_calls>…），甚至整段陷入闭合标签复读。
+     * 这里把孤儿闭合标签删掉、把连续重复行截断，得到干净的可展示/可解析文本。
+     */
+    fun sanitizeReply(content: String): String {
+        var s = content
+        // 1) antml 系（Claude 端点串味的产物）整块移除
+        s = Regex("""</?antml:[^>]*>""").replace(s, "")
+        // 2) 孤儿闭合标签：不配对的 </invoke> </parameter> </function_calls> 连串删掉
+        //    （成对的 </tool_call> 已被解析器消化，这里针对的是解析剩下的孤儿）
+        s = Regex("""(?:\s*</(?:invoke|parameter|function_calls)>)+""").replace(s, "\n")
+        // 3) 连续重复行复读：同一行连出 3 次以上 → 保留一行并截断后面的复读
+        val out = StringBuilder()
+        var prev: String? = null
+        var repeats = 0
+        for (line in s.lines()) {
+            if (line.isNotBlank() && line == prev) {
+                repeats++
+                if (repeats >= 3) continue
+            } else { prev = line; repeats = 1 }
+            out.append(line).append(10.toChar())
+        }
+        return out.toString().trim()
     }
 
     /** 提取技能块以外的纯文本回复 */

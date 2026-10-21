@@ -171,6 +171,8 @@ object ChatSession {
     private suspend fun processAiTurn(ctx: Context, b: AgentVmBridge, userText: String) {
         var currentUserText = userText
         cancelled = false
+        // 格式纠错重试：模型喷了技能碎片但解析不出合法卡片时，要求重发（最多一次）
+        var formatRetryUsed = false
         val config = AgentStore.config(ctx)
         if (!config.isUsable) {
             synchronized(messages) { messages.add(ChatMessage(role = "assistant", content = "⚠️ LLM is not configured yet — set it up in Settings → \"AgentPaw for AndroPaw\".", isWarning = true)) }
@@ -264,10 +266,33 @@ object ChatSession {
                 return
             }
 
-            // 解析技能卡
-            val cleanedReply = replyText.replace("[END_TURN]", "").trimEnd()
+            // 解析技能卡（先清洗：孤儿闭合标签/复读截断/antml 残渣）
+            val cleanedReply = ChatParser.sanitizeReply(replyText.replace("[END_TURN]", "").trimEnd())
             val plainText = ChatParser.stripSkillBlocks(cleanedReply)
             val skills = ChatParser.parseSkillBlocks(cleanedReply)
+
+            // 格式纠错：模型明显想发卡（碎片可见）但解析不出合法卡片 → 要求重发一次
+            val looksLikeCard = Regex("tool_name|<invoke|function_calls|skillType", RegexOption.IGNORE_CASE).containsMatchIn(cleanedReply)
+            if (skills.isEmpty() && looksLikeCard && !formatRetryUsed) {
+                formatRetryUsed = true
+                synchronized(messages) {
+                    val i = messages.indexOfFirst { it.id == streamMsgId }
+                    if (i >= 0) messages[i] = messages[i].copy(
+                        content = "⚠️ 技能卡格式错误，已要求重新生成…", isWarning = true)
+                }
+                persist(ctx); notifyChange()
+                currentUserText = buildString {
+                    appendLine("[检测到格式错误的技能卡] 你想调用技能，但格式不合法。请严格按以下模板重发（每个开标签恰好一个闭标签，不要输出 </invoke>、</parameter>、antml:function_calls 等多余闭合标签）：")
+                    appendLine("```xml")
+                    appendLine("<tool_call>")
+                    appendLine("  <tool_name>SKILL_TYPE</tool_name>")
+                    appendLine("  <parameter name=\"name\">value</parameter>")
+                    appendLine("</tool_call>")
+                    appendLine("```")
+                    append("你刚才（片段）：").append(cleanedReply.take(300))
+                }
+                continue
+            }
 
             // 更新正文（剥掉卡片块）
             synchronized(messages) {
