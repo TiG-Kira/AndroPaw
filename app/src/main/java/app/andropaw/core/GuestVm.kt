@@ -1319,8 +1319,30 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * 不重建目录树、不动 fb/binder 桥，因此比整机冷重启快得多，且能真正把
      * zygote → system_server → WMS/InputDispatcher 拉回来（framework 复活的关键）。
      */
+    /** 画面重置钩子：软重启会换掉 surfaceflinger 实例，宿主侧的显示通路必须跟着重绑 */
+    @Volatile var onScreenReset: (() -> Unit)? = null
+
+    /**
+     * 软重启期间的画面重置：让 UI 侧丢掉旧的表面缓存重新绑定，再熄屏亮屏一次逼新
+     * surfaceflinger 合成。不重建 fb 文件本身（mmap 中 truncate 会 SIGBUS）。
+     */
+    private fun resetScreen(reason: String) {
+        runCatching { onScreenReset?.invoke() }
+        log("screen reset: $reason")
+        runCatching {
+            kotlinx.coroutines.runBlocking {
+                guestRunner.run(listOf("/system/bin/sh", "-c", "$shellPrefix input keyevent 26"), 8000)
+            }
+            Thread.sleep(400)
+            kotlinx.coroutines.runBlocking {
+                guestRunner.run(listOf("/system/bin/sh", "-c", "$shellPrefix input keyevent 26"), 8000)
+            }
+        }
+    }
+
     private fun replayServicePlan() {
         val plan = runCatching { servicePlan() }.getOrNull() ?: return
+        resetScreen("before replaying the service plan")
         log("soft reboot: replaying ${plan.size} service(s) from init.rc")
         var n = 0
         for (svc in plan) {
@@ -1332,6 +1354,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             Thread.sleep(150)   // 让 socket 依次就位，避免下一项立刻失败
         }
         log("soft reboot: started $n service(s)")
+        // 新 surfaceflinger 起来后必须再重置一次，否则显示通路仍指向已死的旧实例
+        Thread.sleep(1500)
+        resetScreen("after the service plan came back")
     }
 
     private fun respawnCore() {

@@ -203,6 +203,13 @@ class VmActivity : ComponentActivity() {
         vm = if (cur != null && cur.img.id == img.id) cur
             else GuestVm(applicationContext, img).also { it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.vm = it }
         vm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+        // 软重启会换掉 surfaceflinger：让显示视图重新绑定，避免画面停在旧帧
+        vm.onScreenReset = {
+            runCatching {
+                guest.poke()
+                if (::guest.isInitialized) guest.format = if (vm.engine == app.andropaw.core.Engine.N64) 1 else guest.format
+            }
+        }
         requestIgnoreBatteryOptimizationsOnce()
         vm.onFreeze = { f -> runOnUiThread { frozenState.value = f } }
         val s = vm.settings
