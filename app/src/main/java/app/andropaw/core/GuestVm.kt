@@ -1146,11 +1146,16 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 sweepExitTimes.clear()
                                 log("✖ mass SIGKILL — rebuilding the core process tree immediately (no guest OS restart)")
                                 writeRebootNotice("检测到模拟器进程被宿主回收，正在重建核心进程并恢复…")
-                                // 立刻重建：guest 自己的崩溃恢复会把整个系统重启（黑屏/冻结），我们不等它
+                                // 不抢 init 的重启（抢会双实例抢 binder 全废）：init 已因 zygote 去掉 critical
+                                // 而只重启 zygote、不 reboot 系统；这里等它把 zygote/sf 拉回来再恢复前台
                                 Thread({
-                                    runCatching { respawnCore() }
+                                    val deadline = System.currentTimeMillis() + 18_000
+                                    while (System.currentTimeMillis() < deadline) {
+                                        if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) break
+                                        Thread.sleep(1000)
+                                    }
                                     runCatching { if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) restoreForeground() }
-                                }, "fast-respawn").apply { isDaemon = true; start() }
+                                }, "fast-restore-wait").apply { isDaemon = true; start() }
                                 continue@wd
                             }
                             if (!sweepRebootTried) {
@@ -1270,20 +1275,24 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     "$shellPrefix dumpsys window windows 2>/dev/null | grep -m1 mCurrentFocus"), 6000)
             }
             // 形如：mCurrentFocus=Window{... u0 com.android.settings/com.android.settings.Settings}
-            val m = Regex("""u0\s+([A-Za-z0-9_.]+)/""").find(out)
-            m?.groupValues?.getOrNull(1)?.let { lastForegroundPkg = it }
+            val m = Regex("""u0\s+([A-Za-z0-9_.]+)/([A-Za-z0-9_.$]+)""").find(out)
+            m?.let { mm -> lastForegroundPkg = mm.groupValues[1] + "/" + mm.groupValues[2] }
         }
     }
 
     /** 快速恢复成功后把用户拉回原来的应用 */
     private fun restoreForeground() {
-        val pkg = lastForegroundPkg ?: return
+        val target = lastForegroundPkg ?: return
+        val pkg = target.substringBefore('/')
         runCatching {
             kotlinx.coroutines.runBlocking {
-                guestRunner.run(listOf("/system/bin/sh", "-c",
+                // 先精确回到同一个 Activity（更接近刚才那个界面），失败再退回 launcher 入口
+                val (code, _) = guestRunner.run(listOf("/system/bin/sh", "-c",
+                    "$shellPrefix am start -n $target"), 15_000)
+                if (code != 0) guestRunner.run(listOf("/system/bin/sh", "-c",
                     "$shellPrefix monkey -p $pkg -c android.intent.category.LAUNCHER 1"), 15_000)
             }
-            log("fast recovery: relaunched $pkg")
+            log("fast recovery: restored $target")
         }
     }
 

@@ -1458,6 +1458,7 @@ class TreeFixer(
         )
         for ((rel, v) in bat) File(base, rel).let { if (!it.isFile) { it.parentFile?.mkdirs(); it.writeText(v + "\n") } }
         healthdRelativeSysfs(base)
+        dropZygoteCritical()
         personalityNoop()
         parkNfc()
         mainStackMaps()
@@ -1886,6 +1887,40 @@ class TreeFixer(
      * call to the host kernel. The personality syscall stub (mov ip,r7; mov r7,#136; swi 0) gets "mov r0,#0"
      * instead of the swi, in libc.so and in static binaries (healthd, ueventd…). Done once per image.
      */
+    /**
+     * zygote 在 init.rc 里是 critical 服务：连续崩溃时 init 会 reboot 整个系统（qemu 直接退出，
+     * 表现为"guest 自我重启 + 界面冻结"）。去掉 critical 标记后 init 只重启 zygote，
+     * framework 重新 boot（快得多），我们的恢复链才有意义。原始文件留备份。
+     */
+    private fun dropZygoteCritical() {
+        runCatching {
+            val rc = File(root, "init.rc")
+            if (!rc.isFile) return
+            val text = rc.readText()
+            if (!text.contains("critical")) return
+            val out = StringBuilder()
+            var inZygote = false
+            var changed = false
+            for (line in text.lines()) {
+                val t = line.trim()
+                if (t.startsWith("service ") || t.startsWith("on ") || t.startsWith("import ")) {
+                    inZygote = t.startsWith("service zygote")
+                }
+                out.append(
+                    if (inZygote && (t == "critical" || t.startsWith("critical "))) {
+                        changed = true
+                        "    #critical   // removed by AndroPaw: keep init from rebooting the whole guest"
+                    } else line
+                ).append('\n')
+            }
+            if (changed) {
+                File(root, "system/.aemu-parked/init.rc.orig").let { it.parentFile?.mkdirs(); it.writeText(text) }
+                rc.writeText(out.toString())
+                log?.invoke("init: dropped zygote critical flag (crash restarts zygote, not the whole guest)")
+            }
+        }
+    }
+
     private fun personalityNoop() {
         if (img.api < 23) return
         val stamp = File(root, ".aemu-personality")
