@@ -1122,7 +1122,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 sweepRebootTried = true
                                 sweepExitTimes.clear()
                                 log("✖ mass SIGKILL (≥4 processes in 4 s) — the guest is shutting itself down; cold-rebooting the machine once")
-                                writeRebootNotice("检测到 guest 进程成批被杀（MIUI 等系统的后台清理会按 uid 扫掉模拟器子进程），正在冷重启模拟器…\n\n建议：把 AndroPaw 设为「无限制/不省电」，并在最近任务里锁定，可避免反复发生。")
+                                writeRebootNotice("检测到 guest 进程成批被杀（宿主系统内存紧张时内核按重要性回收模拟器子进程），正在冷重启模拟器…\n\n建议：1) 设置里把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定；2) 把模拟器分辨率/内存调小可显著降低被回收的概率。")
                                 onPower?.invoke(true, "")
                                 break@wd
                             }
@@ -1477,8 +1477,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * with code 137 → (1/12). Root is required to write a negative adj; if it fails we just log it.
      */
     @Volatile private var lastPinned = -1
+    /** pin 被宿主拒绝后的下一次探测时间（非 root 必被拒，别每轮都白扫 /proc） */
+    @Volatile private var nextPinProbeAt = 0L
 
-    private fun protectProcessTree() {
+    private fun protectProcessTree(force: Boolean = false) {
+        val now0 = System.currentTimeMillis()
+        if (oomUnsupported && !force && now0 < nextPinProbeAt) return
         val mine = AProcess.myPid()
         var pinned = 0
         writeOomScore(mine, PROTECTED_OOM_ADJ)
@@ -1518,17 +1522,17 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             lastPinned = pinned
             log("oom: pinned $pinned guest process(es) at $PROTECTED_OOM_ADJ" + if (oomUnsupported) " (some writes refused — host policy)" else "")
         }
+        if (oomUnsupported && pinned == 0) nextPinProbeAt = now0 + 60_000
     }
 
     /** 写别的进程的 oom_score_adj 只要求能 signal 它（同 uid 即可）——guest 进程与 :vm 同 uid，
      * 所以非 root 宿主上这一 pin 同样生效；真失败（SELinux 拦截等）记一次日志后静默继续。 */
     @Volatile private var oomUnsupported = false
 
-    /** 给 guest 进程 pin 分数：-1000（never kill）写不进去就退 -900、-800，至少低于普通应用 */
+    /** pin -1000（never kill）。被宿主拒绝时立刻放弃——负值同样需要 CAP_SYS_RESOURCE，重试无意义 */
     private fun pinGuest(pid: Int) {
-        for (adj in intArrayOf(PROTECTED_OOM_ADJ, -900, -800)) {
-            if (writeOomScore(pid, adj)) return
-        }
+        if (oomUnsupported) return
+        writeOomScore(pid, PROTECTED_OOM_ADJ)
     }
 
     private fun writeOomScore(pid: Int, adj: Int): Boolean {
@@ -1549,7 +1553,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     /** Re-pin the guest process tree every few seconds so freshly spawned helpers stay protected. */
     /** 立刻刷一遍 oom pin（切后台前调用：MIUI 的清理通常就在失焦后的几秒内发生） */
-    fun reprotectNow() { runCatching { protectProcessTree() } }
+    fun reprotectNow() { runCatching { protectProcessTree(force = true) } }
 
     private fun protectLoop() {
         while (!stopping && state != State.STOPPED) {
