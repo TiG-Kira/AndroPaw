@@ -747,7 +747,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
     }.getOrDefault(false)
 
+    /** 核心进程的启动参数表：批量死亡后据此原样重建，而不是等 guest init / framework 的整机重启 */
+    private val spawnSpecs = java.util.concurrent.ConcurrentHashMap<String, Pair<List<String>, Map<String, String>>>()
+
     private fun spawn(name: String, cmd: List<String>, env: Map<String, String>) {
+        spawnSpecs[name] = cmd to env
         val log = paths.log(name)
         val pb = ProcessBuilder(cmd).directory(paths.bin).redirectErrorStream(true)
         pb.environment().clear()
@@ -1138,10 +1142,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             // 第一优先：不冷重启，让 guest init 自己把核心进程拉回来（通常 10-30 秒），
                             // 恢复成功后把用户拉回原来的前台应用 —— 比整机冷启动快一个数量级
                             if (fastRecoveryUntil == 0L && !sweepRebootTried) {
-                                fastRecoveryUntil = System.currentTimeMillis() + 45_000
+                                fastRecoveryUntil = System.currentTimeMillis() + 30_000
                                 sweepExitTimes.clear()
-                                log("✖ mass SIGKILL — entering fast recovery: letting guest init restart zygote/surfaceflinger (deadline 45 s)")
-                                writeRebootNotice("检测到模拟器进程被宿主回收，正在自动恢复…（恢复失败才会冷重启）")
+                                log("✖ mass SIGKILL — rebuilding the core process tree immediately (no guest OS restart)")
+                                writeRebootNotice("检测到模拟器进程被宿主回收，正在重建核心进程并恢复…")
+                                // 立刻重建：guest 自己的崩溃恢复会把整个系统重启（黑屏/冻结），我们不等它
+                                Thread({
+                                    runCatching { respawnCore() }
+                                    runCatching { if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) restoreForeground() }
+                                }, "fast-respawn").apply { isDaemon = true; start() }
                                 continue@wd
                             }
                             if (!sweepRebootTried) {
@@ -1227,6 +1236,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
     @Volatile private var fastRecoveryUntil = 0L
+
+    /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
+    private fun respawnCore() {
+        val order = listOf("binderd", "hwbinderd", "vndbinderd", "servicemanager", "surfaceflinger",
+            "keystore", "installd", "netd", "drmserver", "mediaserver", "bootanim", "fmradio", "aemu-bt", "zygote")
+        var n = 0
+        for (name in order) {
+            if (stopping) return
+            if (guestProcAlive(name)) continue
+            val spec = spawnSpecs[name] ?: continue
+            runCatching { spawn(name, spec.first, spec.second); n++ }
+                .onFailure { log("respawn $name failed: ${it.message}") }
+            Thread.sleep(80)   // 给 binder/socket 一点点就绪时间，避免下一项立刻失败
+        }
+        log("fast recovery: respawned $n core process(es)")
+    }
 
     /** guest 里某个进程是否还活着（扫 /proc 的 cmdline，含 qemu 包装的 guest 二进制名） */
     private fun guestProcAlive(name: String): Boolean =
