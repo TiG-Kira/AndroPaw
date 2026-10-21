@@ -456,7 +456,7 @@ fun AgentChatOverlay(
 private fun ChatBubble(msg: ChatMessage) {
     when {
         msg.role == "user" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Card(modifier = Modifier.fillMaxWidth(0.86f), insideMargin = PaddingValues(12.dp)) {
+            Card(modifier = Modifier.widthIn(max = 300.dp), insideMargin = PaddingValues(12.dp)) {
                 Text(parseMarkdown(msg.content), fontSize = 15.sp)
             }
         }

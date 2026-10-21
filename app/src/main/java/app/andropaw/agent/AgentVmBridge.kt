@@ -111,8 +111,16 @@ class AgentVmBridge(
         if (!f.isFile) return@withContext null
         val w = img.settings.width
         val h = img.settings.height
-        val bpp = 2 // 帧缓冲默认 RGB565；8888 的机器按 4 字节再试一次
-        for (bytes in listOf(bpp, 4)) {
+        // 帧缓冲每像素字节数不猜：拿文件长度反推（QEMU 引擎的 fb 尺寸/格式随固件变，
+        // 固定按 settings 的 w*h 会永远 miss 导致截图拿不到）
+        val len = f.length()
+        val candidates = mutableListOf<Int>()
+        for (bpp in listOf(2, 4)) {
+            val frame = w.toLong() * h * bpp
+            if (len >= frame) candidates.add(bpp)
+        }
+        if (candidates.isEmpty() && len >= w.toLong() * h) candidates.add(2) // 兜底：长度不齐也试一把
+        for (bytes in candidates) {
             val pixels = w.toLong() * h * bytes
             if (f.length() < pixels) continue
             val bmp = runCatching {

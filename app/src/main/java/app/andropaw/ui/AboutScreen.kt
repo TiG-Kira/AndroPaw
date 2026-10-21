@@ -95,11 +95,12 @@ fun AboutScreen(onBack: () -> Unit) {
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
 
+    val updateCtx = LocalContext.current
     fun checkForUpdates() {
         if (updateState is UpdateState.Checking || updateState is UpdateState.Downloading) return
         updateState = UpdateState.Checking
         scope.launch {
-            val res = AppUpdateManager.checkLatestRelease()
+            val res = AppUpdateManager.checkLatestRelease(updateCtx.applicationContext)
             res.fold(
                 onSuccess = { rel ->
                     if (rel != null && AppUpdateManager.isNewerVersion(rel.versionName, BuildConfig.VERSION_NAME)) {

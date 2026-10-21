@@ -264,7 +264,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             val now = System.currentTimeMillis()
             if (now - app.andropaw.AppPrefs.lastUpdateCheck(ctx) > 3600_000L) {
                 app.andropaw.AppPrefs.setLastUpdateCheck(ctx, now)
-                val res = AppUpdateManager.checkLatestRelease()
+                val res = AppUpdateManager.checkLatestRelease(ctx)
                 res.getOrNull()?.let { rel ->
                     if (AppUpdateManager.isNewerVersion(rel.versionName, BuildConfig.VERSION_NAME)) {
                         updateState = UpdateState.Available(rel)

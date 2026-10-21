@@ -43,7 +43,7 @@ object AppUpdateManager {
     /**
      * Запрос к GitHub API для получения информации о последнем релизе с APK-файлом.
      */
-    suspend fun checkLatestRelease(): Result<ReleaseInfo?> = withContext(Dispatchers.IO) {
+    suspend fun checkLatestRelease(context: android.content.Context? = null): Result<ReleaseInfo?> = withContext(Dispatchers.IO) {
         runCatching {
             val url = URL(RELEASES_API)
             val conn = url.openConnection() as HttpURLConnection
@@ -70,10 +70,13 @@ object AppUpdateManager {
                 val body = rel.optString("body", "")
 
                 val assets = rel.optJSONArray("assets") ?: continue
+                // 并存包（app.andropaw.0003）必须拿 0003 的包，标准包拿标准包——装错包名安装直接失败
+                val wantV0003 = context?.packageName?.endsWith("0003") == true
+                val wantAsset = if (wantV0003) "app.andropaw.0003.apk" else "app.andropaw.apk"
                 for (j in 0 until assets.length()) {
                     val asset = assets.getJSONObject(j)
                     val assetName = asset.optString("name", "")
-                    if (assetName.endsWith(".apk", ignoreCase = true)) {
+                    if (assetName.equals(wantAsset, ignoreCase = true)) {
                         val downloadUrl = asset.getString("browser_download_url")
                         val sizeBytes = asset.optLong("size", 0L)
                         return@runCatching ReleaseInfo(

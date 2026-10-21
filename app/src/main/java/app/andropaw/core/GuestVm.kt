@@ -1091,6 +1091,26 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         ?: if (name.contains("-hal-") && n < 3) servicePlan().firstOrNull { it.name == name } else null
                     // init restarts surfaceflinger and then zygote ("onrestart restart zygote"); without that a
                     // crashed compositor leaves the last frame on screen forever
+                    // 集群死亡检测：成批 137（同秒全灭、逆启动顺序）= guest 发起了关机/重启，
+                    // 逐个重启 surfaceflinger 毫无意义——整机冷启动一次才对路
+                    if (code == 137) {
+                        val now = System.currentTimeMillis()
+                        sweepExitTimes.addLast(now)
+                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 4000) sweepExitTimes.removeFirst()
+                        if (sweepExitTimes.size >= 4) {
+                            if (!sweepRebootTried) {
+                                sweepRebootTried = true
+                                sweepExitTimes.clear()
+                                log("✖ mass SIGKILL (≥4 processes in 4 s) — the guest is shutting itself down; cold-rebooting the machine once")
+                                onPower?.invoke(true, "")
+                                break@wd
+                            }
+                            log("✖ mass SIGKILL again after reboot — giving up")
+                            failure = "guest processes die in batches (code 137) even after a cold reboot"
+                            setState(State.FAILED)
+                            break@wd
+                        }
+                    }
                     if (name == "surfaceflinger" && svc != null && bootDoneAt > 0 && n < 12) {
                         restarts[name] = n + 1
                         log("✖ surfaceflinger crashed (code $code), restarting it and the system (${n + 1}/12)")
@@ -1151,6 +1171,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     /** zygote 反复崩时的一次性整机自救已用过 */
     @Volatile private var zygoteRebootTried = false
+    /** 集群死亡自救已用过：4 秒内 >=4 个进程 137 = guest 发起关机/重启的 orderly shutdown */
+    @Volatile private var sweepRebootTried = false
+    private val sweepExitTimes = ArrayDeque<Long>()
 
     /**
      * Frozen(true) when the supervisor first acts on a freeze, frozen(false) when progress resumes.
@@ -1368,6 +1391,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         stopping = true
         frozenAnnounced = false
         zygoteRebootTried = false
+        sweepRebootTried = false
         setState(State.STOPPING)
         log("stopping system")
         runCatching { guestRunner.run(listOf("/system/bin/sync"), 5_000) }
