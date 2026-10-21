@@ -1428,8 +1428,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             replyTo = reply
         }
         val sent: Boolean = runCatching { m.send(msg) }.isSuccess
-        if (!sent) return -1
-        runCatching { latch.await(5, java.util.concurrent.TimeUnit.SECONDS) }
+        if (!sent) { log("bridge call what=$what: send failed (host process dead?)"); return -1 }
+        val got = runCatching { latch.await(6, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
+        if (!got) { log("bridge call what=$what: no reply in 6 s (host handler stuck or crashed?)"); return -1 }
         return out[0]
     }
 

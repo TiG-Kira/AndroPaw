@@ -25,8 +25,17 @@ class BridgeHostService : Service() {
 
     private val procs = HashMap<String, java.lang.Process>()
 
+    private fun blog(msg: String) {
+        runCatching {
+            java.io.File(filesDir, "bridge-host.log").appendText(
+                android.text.format.DateFormat.format("HH:mm:ss", java.util.Date()).toString() + " " + msg + System.lineSeparator())
+        }
+    }
+
     private val handler = object : Handler(Looper.getMainLooper()) {
         override fun handleMessage(msg: Message) {
+            blog("recv what=" + msg.what)
+            try {
             when (msg.what) {
                 1 -> {
                     val b = msg.data ?: return
@@ -36,9 +45,16 @@ class BridgeHostService : Service() {
                     val cwd = b.getString("cwd")
                     val logPath = b.getString("log")
                     synchronized(this@BridgeHostService) {
+                        blog("spawn name=$name argv=${argv.toList()} cwd=$cwd")
                         procs.remove(name)?.let { runCatching { it.destroyForcibly() } }
-                        val pb = ProcessBuilder(*argv).directory(File(cwd ?: filesDir.path))
+                        val pb = runCatching { ProcessBuilder(*argv).directory(File(cwd ?: filesDir.path)) }
+                            .getOrNull() ?: run {
+                                blog("ProcessBuilder failed for $name")
+                                runCatching { msg.replyTo?.send(Message.obtain(null, 1, -1, 0)) }
+                                return
+                            }
                         pb.environment().clear()
+                        blog("env=${env.toList()}")
                         pb.environment().putAll(env.mapNotNull { e ->
                             val i = e.indexOf('=')
                             if (i > 0) e.substring(0, i) to e.substring(i + 1) else null
@@ -48,8 +64,10 @@ class BridgeHostService : Service() {
                             pb.redirectOutput(ProcessBuilder.Redirect.appendTo(File(logPath)))
                         }
                         val p = runCatching { pb.start() }.getOrNull()
+                        if (p == null) blog("pb.start() failed for $name")
                         val pid = p?.let { runCatching { java.lang.Process::class.java.getMethod("pid").invoke(it) as? Int }.getOrNull() } ?: -1
                         if (p != null) procs[name] = p
+                        blog("spawned $name pid=$pid")
                         runCatching { msg.replyTo?.send(Message.obtain(null, 1, pid, 0)) }
                     }
                 }
@@ -66,6 +84,11 @@ class BridgeHostService : Service() {
                     procs.values.forEach { runCatching { it.destroyForcibly() } }
                     procs.clear()
                 }
+                else -> { }
+            }
+            } catch (t: Throwable) {
+                blog("handler crashed: ${'$'}{t.javaClass.simpleName}: ${'$'}{t.message}")
+                runCatching { msg.replyTo?.send(Message.obtain(null, msg.what, -1, 0)) }
             }
         }
     }
