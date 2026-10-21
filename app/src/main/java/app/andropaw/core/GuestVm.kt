@@ -1446,10 +1446,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** zygote 单独重建的防抖 */
     @Volatile private var lastZygoteRespawnAt = 0L
     /** 走 :bridge 前台服务承载的核心进程（桥 + 关键 guest 服务） */
+    // 只把「我们自己的宿主桥」和「zygote」交给 :bridge 前台服务承载：
+    //  - 桥进程本来就是我们的二进制，与 guest init 无冲突
+    //  - zygote 是系统的根，父进程有前台身份才可能整棵被 ROM 放过
+    // 其余服务一律走原本逻辑（:vm 本地 spawn，由 guest init 自己管理重启）——
+    // 全交给 bridge 会和 guest init 双重管理，表现为反复 down → rebuild。
     private val CORE_VIA_BRIDGE = setOf(
         "binderd", "hwbinderd", "vndbinderd", "glserverd",
-        "zygote", "surfaceflinger", "servicemanager", "bootanim",
-        "installd", "netd", "keystore", "mediaserver", "drmserver",
+        "zygote",
     )
 
     /** boot 期 zygote 重建次数 */
