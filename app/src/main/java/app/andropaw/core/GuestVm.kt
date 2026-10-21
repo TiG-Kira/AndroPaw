@@ -759,7 +759,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val dirs = dir.split(':').filter { File(paths.root, it).isDirectory }
             if (dirs.isNotEmpty()) extra["AEMU64_LIBPATH"] = dirs.joinToString(":") { "/$it" }
         }
-        spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
+        // 核心服务（含 zygote/surfaceflinger/servicemanager）交给 :bridge 的前台服务承载：
+        // 它们的父进程因此是前台进程，ROM 的后台清理才可能整棵放过。宿主不可达自动退回本地。
+        if (svc.name in CORE_VIA_BRIDGE) spawnBridge(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
+        else spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
     }
 
     /** a 64-bit ELF or a script */
@@ -1209,7 +1212,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                         killGuestPrograms()
                                         Thread.sleep(500)
                                         cleanStaleSockets()
-                                        spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
+                                        spawnSpecs["zygote"]?.let { sp -> spawnBridge("zygote", sp.first, sp.second) }
                                         Thread.sleep(3000)
                                         refreshDisplayCompletely()
                                         restoreForeground()
@@ -1416,6 +1419,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastSoftRebootAt = 0L
     /** zygote 单独重建的防抖 */
     @Volatile private var lastZygoteRespawnAt = 0L
+    /** 走 :bridge 前台服务承载的核心进程（桥 + 关键 guest 服务） */
+    private val CORE_VIA_BRIDGE = setOf(
+        "binderd", "hwbinderd", "vndbinderd", "glserverd",
+        "zygote", "surfaceflinger", "servicemanager", "bootanim",
+        "installd", "netd", "keystore", "mediaserver", "drmserver",
+    )
+
     /** 桥进程重建防抖 */
     @Volatile private var lastBridgeRespawnAt = 0L
 
