@@ -172,8 +172,21 @@ class Importer(
                     finally { f.delete() }
                 }
             }
-        } finally { whole.delete() }
-        if (!gotSystem) log("no system found in archive $name")
+        } finally {
+            if (gotSystem) whole.delete()   // 失败时留着，下面要读条目清单
+        }
+        // 找不到系统镜像时必须失败，而不是"立刻完成"（用户看到的是装完一片空白 + firmware tree missing）。
+        // 顺带把包内结构打进日志，特殊打包方式的包才能被定位。
+        if (!gotSystem) {
+            val heads = runCatching {
+                java.util.zip.ZipFile(whole).use { z ->
+                    z.entries().asSequence().filter { !it.isDirectory }.take(40).joinToString(", ") { it.name }
+                }
+            }.getOrDefault("(unreadable)")
+            runCatching { whole.delete() }
+            log("import: no system image found — entries: $heads")
+            throw IOException("包内没有可识别的系统镜像（支持 system/ 目录、system.img[.sparsechunk]、system.new.dat[.br]+transfer.list、payload.bin、super.img、.sin）。包内条目已写入日志。")
+        }
     }
 
     private fun isTar(h: ByteArray) = h.size > 262 && String(h, 257, 5, Charsets.ISO_8859_1) == "ustar"
