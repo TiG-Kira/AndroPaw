@@ -345,6 +345,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             }
         }
         overrides["dalvik.vm.execution-mode"] = if (s.jit) "int:jit" else "int:fast"
+        // Android 5+（ART）的进程比 Dalvik 大一截，宿主 lmkd 认不出这些进程、只看 RSS 挑大的杀。
+        // 这里默认按低内存设备压体积：zygote 少预加载、堆更小、后台 app 更少。
+        val tinyByDefault = img.api >= 21 && s.ramMb == 0 && !s.lowRam
+        if (tinyByDefault) {
+            overrides["ro.config.low_ram"] = "true"
+            overrides["dalvik.vm.heapsize"] = "192m"
+            overrides["dalvik.vm.heapgrowthlimit"] = "96m"
+            log("memory: 5.0+ default profile — low_ram + 192m heap (smaller RSS survives the host lmkd)")
+        }
         if (s.lowRam || s.ramMb in 1..768) overrides["ro.config.low_ram"] = "true"
         if (s.ramMb > 0) {
             // Dalvik heap sized from the guest RAM budget (like a real device of that class)
@@ -1080,8 +1089,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             var restarts = HashMap<String, Int>()
             wd@ while (!stopping) {
                 Thread.sleep(3000)
-                // lmkd 按 adj 挑肥的杀：每轮顺手把 guest 进程树重新 pin 一遍（zygote 重启后有新 pid）
                 runCatching { protectProcessTree() }
+                // 死前体检：zygote/system_server 的 pid、RSS、adj。被宿主 lmkd 杀时，最后一条
+                // 记录就是"尸体数据"，能直接判断是不是"只认它大"（RSS 越高越可疑）
+                runCatching {
+                    val zg = procs["zygote"]
+                    val pid = zg?.let { pidOf(it) }
+                    if (pid != null) {
+                        val rss = File("/proc/$pid/status").readLines().firstOrNull { it.startsWith("VmRSS:") }
+                            ?.replace("VmRSS:", "")?.trim()
+                        val adj = runCatching { File("/proc/$pid/oom_score_adj").readText().trim() }.getOrNull()
+                        if (rss != null) log("体检 zygote pid=$pid rss=$rss adj=${adj ?: "?"}")
+                    }
+                }
                 // 临时状态快照：每约 18 秒记一次前台应用（恢复时拉回来）
                 if (System.currentTimeMillis() / 1000 % 18 == 0L) runCatching { snapshotGuestState() }
                 // 快速恢复判定：窗口内 zygote + surfaceflinger 都回来了 → 恢复成功
