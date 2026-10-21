@@ -154,6 +154,12 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         if (cmd in NEVER_KILL || base in NEVER_KILL) return false
         if (!cmd.contains('.')) return false
         if (cmd.startsWith("app.andropaw")) return false
+        // 系统关键应用：SystemUI/OOBE/设置被杀会让系统"能进桌面但没状态栏"或开箱流程反复重启
+        for (keep in listOf("com.android.systemui", "com.google.android.setupwizard",
+                "com.android.provision", "com.android.settings", "com.android.phone",
+                "com.android.launcher", "android.process.acore")) {
+            if (cmd.startsWith(keep)) return false
+        }
         return true
     }
 

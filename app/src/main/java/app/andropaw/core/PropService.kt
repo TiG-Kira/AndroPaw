@@ -105,6 +105,14 @@ class PropService(private val paths: VmPaths, private val log: (String) -> Unit)
             else fire { cb(what == "start" || what == "restart", value) }
             return
         }
+        if (name == "sys.powerctl" && value.trim().startsWith("reboot")) {
+            // reboot 交给 guest 自己的流程处理（OOBE 完成后的重启是正常行为，
+            // 我们代为重启会打断 setup wizard 的收尾，表现为"开箱就重启、重启后没有 SystemUI"）
+            put(name, value)
+            writes++
+            onSet?.let { cb -> fire { cb(name, value) } }
+            return
+        }
         if (name == "sys.powerctl") {
             // 策略：一律不允许 guest 发起 orderly shutdown（成批 code 137）。powerctl 不写入
             // 共享属性区——guest init 的关机触发器收不到，只能由宿主侧干净地执行电源动作
