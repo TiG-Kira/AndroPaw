@@ -1088,7 +1088,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         fastRecoveryUntil = 0L
                         if (!sweepRebootTried) {
                             sweepRebootTried = true
-                            log("✖ fast recovery timed out after 45 s — cold reboot")
+                            log("✖ fast recovery timed out after 20 s — cold reboot")
                             writeRebootNotice("自动恢复未成功，正在冷重启模拟器…；建议把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定。")
                             onPower?.invoke(true, "")
                             break@wd
@@ -1187,9 +1187,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 continue@wd
                             }
                             if (fastRecoveryUntil == 0L && !sweepRebootTried) {
-                                fastRecoveryUntil = nowMs + 45_000
+                                fastRecoveryUntil = nowMs + 20_000
                                 sweepExitTimes.clear()
-                                log("✖ mass SIGKILL — waiting for init to bring zygote/surfaceflinger back (45 s window)")
+                                log("✖ mass SIGKILL — waiting for init to bring zygote/surfaceflinger back (20 s window)")
                                 writeRebootNotice("检测到模拟器进程被宿主回收，正在自动恢复…（恢复失败才会冷重启）")
                                 // 不抢 init 的重启（抢会双实例抢 binder 全废）：init 已因 zygote 去掉 critical
                                 // 而只重启 zygote、不 reboot 系统；这里等它把 zygote/sf 拉回来再恢复前台
@@ -1333,9 +1333,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         File("/proc").listFiles()?.any { d ->
             d.name.toIntOrNull() != null && runCatching {
                 String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1)
-            }.getOrNull()?.let { c ->
-                c.contains("/$name") || c.contains("$name ") || (name == "zygote" && c.contains("zygote"))
-            } == true
+            }.getOrNull()?.contains(name) == true
         } ?: false
 
     /** 记录前台应用：每隔一段时间跑一次 dumpsys，集群死亡后据此把用户拉回原来的界面 */
