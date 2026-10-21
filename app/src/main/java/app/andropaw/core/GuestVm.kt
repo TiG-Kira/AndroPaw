@@ -1077,8 +1077,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         log("✔ fast recovery complete — guest is alive again")
                         // 恢复成功就不能再挂着"正在重启"的弹窗：直接删通知文件
                         clearRebootNotice()
-                        lastRecoveryAt = System.currentTimeMillis()
-                        recoveryCount++
                         Thread({ runCatching { restoreForeground() } }, "fast-restore").apply { isDaemon = true; start() }
                         Thread.sleep(1500)
                     }
@@ -1158,86 +1156,35 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     // 集群死亡检测：成批 137（同秒全灭、逆启动顺序）= guest 发起了关机/重启，
                     // 逐个重启 surfaceflinger 毫无意义——整机冷启动一次才对路
                     if (code == 137) {
-                        val now = System.currentTimeMillis()
-                        sweepExitTimes.addLast(now)
-                        // 窗口收紧到 2.5 秒 / 3 个：MIUI 一失焦就清后台，早一步识别早一步自救
-                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
+                        // 大量 137 → 一律软重启：杀光 guest 程序、清 socket、按 init 顺序重放、彻底刷新显示。
+                        // 不退出模拟器页面、不走冷重启。
+                        val nowMs = System.currentTimeMillis()
+                        sweepExitTimes.addLast(nowMs)
+                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < nowMs - 2500) sweepExitTimes.removeFirst()
                         if (sweepExitTimes.size >= 3) {
-                            // 第一优先：不冷重启，让 guest init 自己把核心进程拉回来（通常 10-30 秒），
-                            // 恢复成功后把用户拉回原来的前台应用 —— 比整机冷启动快一个数量级
-                            val nowMs = System.currentTimeMillis()
-                            // 恢复窗口内：死进程是持续冒出来的，每一轮都会再命中 sweep——
-                            // 此前这里直接落到冷重启分支（"几秒就被冷重启"），窗口形同虚设。
-                            // 窗口内一律忽略新的 sweep，交给恢复线程和超时判定。
-                            if (fastRecoveryUntil > 0 && nowMs < fastRecoveryUntil) {
-                                sweepExitTimes.clear()
-                                continue@wd
-                            }
-                            // 反复"被杀→恢复→又被杀"的轮转：60 秒冷却，且最多自愈 3 次；
-                            // 之后说明宿主在持续清理，再自愈只会白耗电，直接停到 FAILED 并提示加白名单
-                            if (recoveryCount >= 3) {
-                                failure = "the host keeps purging the emulator's processes (×$recoveryCount) — add AndroPaw to the battery whitelist"
-                                log("✖ recovery limit reached ($recoveryCount) — stopping; whitelist the app")
-                                writeRebootNotice("宿主系统在持续清理模拟器进程，已停止自动恢复。请在设置里把 AndroPaw 设为「省电策略 → 无限制」并锁定最近任务，然后重新启动机器。")
-                                setState(State.FAILED)
-                                break@wd
-                            }
-                            if (System.currentTimeMillis() - lastRecoveryAt < 60_000 && recoveryCount > 0) {
-                                sweepExitTimes.clear()
-                                continue@wd
-                            }
-                            if (fastRecoveryUntil == 0L && !sweepRebootTried) {
-                                fastRecoveryUntil = nowMs + 90_000
-                                sweepExitTimes.clear()
-                                log("✖ mass SIGKILL — waiting for init to bring zygote/surfaceflinger back (90 s window, soft reboot)")
-                                writeRebootNotice("检测到模拟器进程被宿主回收，正在自动恢复…（恢复失败才会冷重启）")
-                                // 不抢 init 的重启（抢会双实例抢 binder 全废）：init 已因 zygote 去掉 critical
-                                // 而只重启 zygote、不 reboot 系统；这里等它把 zygote/sf 拉回来再恢复前台
+                            sweepExitTimes.clear()
+                            if (!softRebootDone) {
+                                softRebootDone = true
+                                log("✖ mass SIGKILL — soft reboot (no cold restart, page stays)")
+                                writeRebootNotice("检测到模拟器进程成批死亡，正在软重启（不退出页面）…")
                                 Thread({
-                                    val deadline = System.currentTimeMillis() + 40_000
-                                    runCatching { respawnCore() }
-                                    // framework 不是我们能 spawn 的单点：整套服务栈必须按 init.rc 重放
-                                    runCatching { replayServicePlan() }
-                                    while (System.currentTimeMillis() < deadline) {
-                                        // 日志证据：冻结 30 秒后全机只剩 2 个 guest 进程——init 试过几次
-                                        // 就放弃（服务被标记 disabled），不会再拉起。它不干，我们自己拉起。
-                                        // 只补 sf+zygote 不够（pinned 5、画面冻结）：需要整套核心服务。
-                                        // 但只能重建一次——放进循环里会每 3 秒 spawn 一批，进程数暴涨（43→78）
-                                        // 且 aemu-bt 反复 SIGSEGV，guest 状态被打烂（am 段错误）
-                                        val coreReady = guestProcAlive("zygote") &&
-                                            guestProcAlive("surfaceflinger") && guestProcAlive("system_server")
-                                        if (coreReady) {
-                                            // 稳定 3 秒才算真的回来了（起一下又死不算恢复）
-                                            val okUntil = System.currentTimeMillis() + 3000
-                                            var stable = true
-                                            while (System.currentTimeMillis() < okUntil) {
-                                                Thread.sleep(500)
-                                                if (!guestProcAlive("zygote") || !guestProcAlive("system_server")) { stable = false; break }
-                                            }
-                                            if (stable) break
-                                        }
-                                        Thread.sleep(1000)
-                                    }
                                     runCatching {
-                                        if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger") && guestProcAlive("system_server")) restoreForeground()
-                                    }
-                                }, "fast-restore-wait").apply { isDaemon = true; start() }
+                                        killGuestPrograms()
+                                        Thread.sleep(700)
+                                        cleanStaleSockets()
+                                        replayServicePlan()
+                                        Thread.sleep(1200)
+                                        refreshDisplayCompletely()
+                                        restoreForeground()
+                                        clearRebootNotice()
+                                        log("✔ soft reboot finished")
+                                    }.onFailure { log("✖ soft reboot failed: ${it.message}") }
+                                }, "soft-reboot").apply { isDaemon = true; start() }
                                 continue@wd
                             }
-                            if (!sweepRebootTried) {
-                                sweepRebootTried = true
-                                fastRecoveryUntil = 0L
-                                sweepExitTimes.clear()
-                                log("✖ fast recovery failed — cold-rebooting the machine once")
-                                writeRebootNotice("自动恢复未成功，正在冷重启模拟器…\n\n建议：1) 设置里把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定；2) 把模拟器分辨率/内存调小可显著降低被回收的概率。")
-                                onPower?.invoke(true, "")
-                                break@wd
-                            }
-                            log("✖ mass SIGKILL again after reboot — giving up")
-                            failure = "guest processes die in batches (code 137) even after a cold reboot"
-                            setState(State.FAILED)
-                            break@wd
+                            log("✖ mass SIGKILL again after a soft reboot — leaving it to the user")
                         }
+                        continue@wd
                     }
                     if (name == "surfaceflinger" && svc != null && bootDoneAt > 0 && n < 12) {
                         restarts[name] = n + 1
@@ -1307,9 +1254,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
     @Volatile private var fastRecoveryUntil = 0L
-    /** 已完成的快速恢复次数 / 上次恢复完成时间（用于冷却与上限，避免被杀-恢复轮转） */
-    @Volatile private var recoveryCount = 0
-    @Volatile private var lastRecoveryAt = 0L
+    /** 软重启只做一次：反复被杀时不再无限软重启 */
+    @Volatile private var softRebootDone = false
 
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
     private val respawnTried = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
@@ -1319,6 +1265,57 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * 不重建目录树、不动 fb/binder 桥，因此比整机冷重启快得多，且能真正把
      * zygote → system_server → WMS/InputDispatcher 拉回来（framework 复活的关键）。
      */
+    /** 终止所有 guest 侧程序（保留 binder/gl 桥：它们是宿主 helper，重起会打断新服务栈） */
+    private fun killGuestPrograms() {
+        val mine = AProcess.myPid()
+        var n = 0
+        File("/proc").listFiles()?.forEach { d ->
+            val pid = d.name.toIntOrNull() ?: return@forEach
+            if (pid == mine) return@forEach
+            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace(' ', ' ') }.getOrNull() ?: return@forEach
+            if (cmd.contains("binderd") || cmd.contains("glserverd")) return@forEach
+            val isGuest = cmd.contains("/system/bin/") || cmd.contains("/system/xbin/") ||
+                cmd.contains("/images/") || cmd.contains("libaemu64") || cmd.contains("libqemu")
+            if (isGuest) { runCatching { AProcess.sendSignal(pid, 9) }; n++ }
+        }
+        synchronized(procs) { procs.clear() }
+        log("soft reboot: terminated $n guest program(s)")
+    }
+
+    /** 清掉上一代服务留下的 socket，否则新实例 bind 失败（zygote 尤其） */
+    private fun cleanStaleSockets() {
+        val sock = File(paths.root, "dev/socket")
+        var n = 0
+        for (nm in listOf("zygote", "zygote_secondary", "installd", "netd", "keystore", "keystore2",
+                "dnsproxyd", "mdns", "debuggerd", "vold", "media", "camera", "sensorservice", "thermal")) {
+            val f = File(sock, nm)
+            if (f.exists() && runCatching { f.delete() }.getOrDefault(false)) n++
+        }
+        log("soft reboot: cleared $n stale socket(s)")
+    }
+
+    /** 彻底刷新显示：重建 GL 桥 → 补一帧黑（不 truncate）→ 通知 UI 重绑 → 熄屏亮屏逼新 sf 合成 */
+    private fun refreshDisplayCompletely() {
+        runCatching { spawnGl() }
+        Thread.sleep(600)
+        runCatching { onScreenReset?.invoke() }
+        runCatching {
+            val fb = paths.fb
+            if (fb.isFile && fb.length() > 0) {
+                java.io.RandomAccessFile(fb, "rw").use { raf ->
+                    val zero = ByteArray(64 * 1024)
+                    var off = 0L
+                    while (off < fb.length()) {
+                        val n = minOf(zero.size.toLong(), fb.length() - off).toInt()
+                        raf.seek(off); raf.write(zero, 0, n); off += n
+                    }
+                }
+            }
+        }
+        resetScreen("after soft reboot: display rebuilt")
+        log("soft reboot: display refreshed")
+    }
+
     /** 画面重置钩子：软重启会换掉 surfaceflinger 实例，宿主侧的显示通路必须跟着重绑 */
     @Volatile var onScreenReset: (() -> Unit)? = null
 
