@@ -79,6 +79,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
     private val stateListeners = CopyOnWriteArrayList<(State) -> Unit>()
     private val logFile = File(paths.bin, "aemu.log")
+    /** 创建时刻：bootDoneAt 可能因属性没收到而永远是 0，用它做兜底计时 */
+    private val created = System.currentTimeMillis()
 
     fun log(s: String) {
         val line = "${stamp()} $s"
@@ -1162,7 +1164,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         val nowMs = System.currentTimeMillis()
                         sweepExitTimes.addLast(nowMs)
                         while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < nowMs - 2500) sweepExitTimes.removeFirst()
-                        if (sweepExitTimes.size >= 3 && bootDoneAt > 0) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
+                        if (sweepExitTimes.size >= 3 &&
+        // boot 早期保护 90 秒（HIDL HAL 成批起落），之后一律允许软重启——
+        // 之前只认 bootDoneAt，属性没收到时恢复逻辑就彻底失效、系统直接卡死
+        (bootDoneAt > 0 || state == State.RUNNING || System.currentTimeMillis() - created > 90_000)) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
                             if (!softRebootDone) {
                                 softRebootDone = true
