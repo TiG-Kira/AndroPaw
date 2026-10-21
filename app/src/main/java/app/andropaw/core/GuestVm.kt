@@ -1159,6 +1159,26 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             TreeFixer(ctx, paths, img, ::log).noScreenSleep()
                             restartZygote()
                         } else if (bootDoneAt > 0 || everBooted) {
+                            // zygote 死 = framework 全死。与其走"重启整个系统"（黑屏十秒起），
+                            // 不如立刻重建 zygote：它 fork system_server 后 framework 自己回来，
+                            // 界面不退出、页面不重建。限频 15 秒，防止疯狂抖动。
+                            if (System.currentTimeMillis() - lastZygoteRespawnAt > 15_000) {
+                                lastZygoteRespawnAt = System.currentTimeMillis()
+                                log("✖ zygote died (code $code) — rebuilding it immediately, no full restart")
+                                Thread({
+                                    runCatching {
+                                        killGuestPrograms()
+                                        Thread.sleep(500)
+                                        cleanStaleSockets()
+                                        spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
+                                        Thread.sleep(3000)
+                                        refreshDisplayCompletely()
+                                        restoreForeground()
+                                        log("✔ zygote rebuilt — framework is back")
+                                    }.onFailure { log("✖ zygote rebuild failed: ${it.message}") }
+                                }, "zygote-rebuild").apply { isDaemon = true; start() }
+                                continue@wd
+                            }
                             zygoteRestarts++
                             val now = System.currentTimeMillis()
                             zygoteCrashes.addLast(now)
@@ -1201,8 +1221,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 之前只认 bootDoneAt，属性没收到时恢复逻辑就彻底失效、系统直接卡死
         (bootDoneAt > 0 || state == State.RUNNING || System.currentTimeMillis() - created > 90_000)) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
-                            if (!softRebootDone) {
-                                softRebootDone = true
+                            val sinceLast = System.currentTimeMillis() - lastSoftRebootAt
+                            if (sinceLast > 45_000) {
+                                lastSoftRebootAt = System.currentTimeMillis()
                                 log("✖ mass SIGKILL — soft reboot (no cold restart, page stays)")
                                 writeRebootNotice("检测到模拟器进程成批死亡，正在软重启（不退出页面）…")
                                 Thread({
@@ -1292,8 +1313,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
     @Volatile private var fastRecoveryUntil = 0L
-    /** 软重启只做一次：反复被杀时不再无限软重启 */
-    @Volatile private var softRebootDone = false
+    /** 软重启防抖：刚重启过 45 秒内不重复（允许反复恢复，不再一次性焊死） */
+    @Volatile private var lastSoftRebootAt = 0L
+    /** zygote 单独重建的防抖 */
+    @Volatile private var lastZygoteRespawnAt = 0L
 
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
     private val respawnTried = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
@@ -1693,6 +1716,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         frozenAnnounced = false
         zygoteRebootTried = false
         sweepRebootTried = false
+        lastSoftRebootAt = 0L
+        lastZygoteRespawnAt = 0L
         fastRecoveryUntil = 0L
         clearRebootNotice()
         setState(State.STOPPING)
