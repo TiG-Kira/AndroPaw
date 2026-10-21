@@ -1139,7 +1139,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                     onPower?.invoke(true, "")
                                     break@wd
                                 }
-                                failure = "system keeps crashing: $name exited $recentCrashesIn1Min times in 1 min (${zygoteCrashes.size} times in 10 min, last code $code)"
+                                failure = "system keeps crashing: $name exited $recentCrashesIn1Min times in 1 min (${zygoteCrashes.size} times in 10 min, last code $code)" + " | 最近: " + lines.takeLast(3).joinToString(" ; ")
                                 log("✖ $failure"); setState(State.FAILED)
                             } else {
                                 log("✖ $name crashed (code $code), restarting system ($zygoteRestarts)")
@@ -1162,7 +1162,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         val nowMs = System.currentTimeMillis()
                         sweepExitTimes.addLast(nowMs)
                         while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < nowMs - 2500) sweepExitTimes.removeFirst()
-                        if (sweepExitTimes.size >= 3) {
+                        if (sweepExitTimes.size >= 3 && bootDoneAt > 0) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
                             if (!softRebootDone) {
                                 softRebootDone = true
