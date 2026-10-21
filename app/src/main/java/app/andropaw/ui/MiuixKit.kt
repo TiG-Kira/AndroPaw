@@ -339,7 +339,12 @@ fun RebootNoticeHost() {
         }
     }
     reason?.let { r ->
-        MiuixDialog(show = true, title = "正在重启模拟器", summary = r, onDismissRequest = {}) {
+        val noticeTitle = when {
+            r.contains("恢复") -> "正在恢复模拟器"
+            r.contains("持续清理") -> "需要手动处理"
+            else -> "正在重启模拟器"
+        }
+        MiuixDialog(show = true, title = noticeTitle, summary = r, onDismissRequest = {}) {
             androidx.compose.foundation.layout.Column(
                 androidx.compose.ui.Modifier.fillMaxWidth()
                     .background(androidx.compose.ui.graphics.Color(0xFF1E1E1E), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))

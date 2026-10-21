@@ -1075,7 +1075,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         fastRecoveryUntil = 0L
                         sweepExitTimes.clear()
                         log("✔ fast recovery complete — guest is alive again")
-                        writeRebootNotice("已自动恢复（无需冷重启）")
+                        // 恢复成功就不能再挂着"正在重启"的弹窗：直接删通知文件
+                        clearRebootNotice()
+                        lastRecoveryAt = System.currentTimeMillis()
+                        recoveryCount++
                         Thread({ runCatching { restoreForeground() } }, "fast-restore").apply { isDaemon = true; start() }
                         Thread.sleep(1500)
                     }
@@ -1167,6 +1170,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             // 此前这里直接落到冷重启分支（"几秒就被冷重启"），窗口形同虚设。
                             // 窗口内一律忽略新的 sweep，交给恢复线程和超时判定。
                             if (fastRecoveryUntil > 0 && nowMs < fastRecoveryUntil) {
+                                sweepExitTimes.clear()
+                                continue@wd
+                            }
+                            // 反复"被杀→恢复→又被杀"的轮转：60 秒冷却，且最多自愈 3 次；
+                            // 之后说明宿主在持续清理，再自愈只会白耗电，直接停到 FAILED 并提示加白名单
+                            if (recoveryCount >= 3) {
+                                failure = "the host keeps purging the emulator's processes (×$recoveryCount) — add AndroPaw to the battery whitelist"
+                                log("✖ recovery limit reached ($recoveryCount) — stopping; whitelist the app")
+                                writeRebootNotice("宿主系统在持续清理模拟器进程，已停止自动恢复。请在设置里把 AndroPaw 设为「省电策略 → 无限制」并锁定最近任务，然后重新启动机器。")
+                                setState(State.FAILED)
+                                break@wd
+                            }
+                            if (System.currentTimeMillis() - lastRecoveryAt < 60_000 && recoveryCount > 0) {
                                 sweepExitTimes.clear()
                                 continue@wd
                             }
@@ -1293,6 +1309,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
     @Volatile private var fastRecoveryUntil = 0L
+    /** 已完成的快速恢复次数 / 上次恢复完成时间（用于冷却与上限，避免被杀-恢复轮转） */
+    @Volatile private var recoveryCount = 0
+    @Volatile private var lastRecoveryAt = 0L
 
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
     private fun respawnCore() {
