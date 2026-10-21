@@ -1272,7 +1272,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         File("/proc").listFiles()?.forEach { d ->
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == mine) return@forEach
-            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace(' ', ' ') }.getOrNull() ?: return@forEach
+            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace(0.toChar(), (32).toChar()) }.getOrNull() ?: return@forEach
             if (cmd.contains("binderd") || cmd.contains("glserverd")) return@forEach
             val isGuest = cmd.contains("/system/bin/") || cmd.contains("/system/xbin/") ||
                 cmd.contains("/images/") || cmd.contains("libaemu64") || cmd.contains("libqemu")
