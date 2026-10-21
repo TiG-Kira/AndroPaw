@@ -170,7 +170,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val qemu = paths.nativeBin(if (is64) kernel.runner else Engine.KK.qemu)
         if (!is64 && !(img.settings.native32 && CpuInfo.hasAArch32) && !qemu.canExecute()) error("translator ${Engine.KK.qemu} is not executable")
         killLeftovers()
-        bindBridgeHost()          // 桥进程迁到独立 FGS 进程 :bridge 承载（治本：ROM 清理扫不掉）
+        bindBridgeHost()          // zygote 由 :bridge 前台服务承载（只保护 zygote）
         HostNative.limitStackSafe()
         TreeFixer(ctx, paths, img, ::log).fixup()   // framebuffer, input node
         val sd = Sdcard.setup(ctx, paths, img, ::log)
@@ -1119,21 +1119,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     }
                     seenGuestPids.clear(); seenGuestPids.addAll(nowSet)
                 }
-                // ---- watchdog L2：桥进程（:bridge 承载，AIDL 查询）----
-                // 桥断 = guest 全崩，单独死就立刻重建，不等批量
-                runCatching {
-                    for (bn in listOf("binderd", "hwbinderd", "vndbinderd", "glserverd")) {
-                        if (bridgeAlive(bn)) continue
-                        val now = System.currentTimeMillis()
-                        log("watchdog: bridge $bn is down (host-side) — rebuilding")
-                        sweepExitTimes.addLast(now)
-                        while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
-                        if (now - lastBridgeRespawnAt > 10_000) {
-                            lastBridgeRespawnAt = now
-                            spawnSpecs[bn]?.let { sp -> spawnBridge(bn, sp.first, sp.second) }
-                        }
-                    }
-                }
+                // （桥挽救已撤：反复"拉桥→唤醒→掉→再拉"会形成无限循环，把能启动的固件也拖垮。
+                //  现在只监听——桥死了交给用户决策：snackbar 里选等待自救或冷重启。）
                 // 死前体检：zygote/system_server 的 pid、RSS、adj。被宿主 lmkd 杀时，最后一条
                 // 记录就是"尸体数据"，能直接判断是不是"只认它大"（RSS 越高越可疑）
                 runCatching {
@@ -1223,13 +1210,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 log("✖ zygote died (code $code) — rebuilding it immediately, no full restart")
                                 Thread({
                                     runCatching {
-                                        killGuestPrograms()
-                                        Thread.sleep(500)
-                                        cleanStaleSockets()
                                         spawnSpecs["zygote"]?.let { sp -> spawnBridge("zygote", sp.first, sp.second) }
                                         Thread.sleep(3000)
-                                        refreshDisplayCompletely()
-                                        restoreForeground()
                                         log("✔ zygote rebuilt — framework is back")
                                     }.onFailure { log("✖ zygote rebuild failed: ${it.message}") }
                                 }, "zygote-rebuild").apply { isDaemon = true; start() }
@@ -1437,10 +1419,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     //  - zygote 是系统的根，父进程有前台身份才可能整棵被 ROM 放过
     // 其余服务一律走原本逻辑（:vm 本地 spawn，由 guest init 自己管理重启）——
     // 全交给 bridge 会和 guest init 双重管理，表现为反复 down → rebuild。
-    private val CORE_VIA_BRIDGE = setOf(
-        "binderd", "hwbinderd", "vndbinderd", "glserverd",
-        "zygote",
-    )
+    // 只把 zygote 交给 :bridge 前台服务承载（FGS 保护）。桥进程与其它服务一律本地 spawn：
+    // 桥走 bridge 会触发"拉桥→唤醒→掉→再拉"的无限循环，把能启动的固件也拖垮。
+    private val CORE_VIA_BRIDGE = setOf("zygote")
 
     /** boot 期 zygote 重建次数 */
     @Volatile private var zygoteBootTries = 0
