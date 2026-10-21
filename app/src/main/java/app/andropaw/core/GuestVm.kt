@@ -1361,7 +1361,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 if (code != 0) guestRunner.run(listOf("/system/bin/sh", "-c",
                     "$shellPrefix monkey -p $pkg -c android.intent.category.LAUNCHER 1"), 15_000)
             }
-            log("fast recovery: restored $target")
+            // 重建后的 WindowManager 不会主动重绘：熄屏再亮屏强制一次合成，
+            // 否则画面停在最后一帧（日志里的 "screen: nothing drawn" 就是它）
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    guestRunner.run(listOf("/system/bin/sh", "-c", "$shellPrefix input keyevent 26"), 8000)
+                }
+                Thread.sleep(500)
+                kotlinx.coroutines.runBlocking {
+                    guestRunner.run(listOf("/system/bin/sh", "-c", "$shellPrefix input keyevent 26"), 8000)
+                }
+                Thread.sleep(800)
+                kotlinx.coroutines.runBlocking {
+                    guestRunner.run(listOf("/system/bin/sh", "-c", "$shellPrefix am start -n $target"), 15_000)
+                }
+            }
+            log("fast recovery: restored $target (screen re-composited)")
         }
     }
 
