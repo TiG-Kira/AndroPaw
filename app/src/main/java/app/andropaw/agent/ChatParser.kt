@@ -80,7 +80,13 @@ object ChatParser {
         s = Regex("""</?antml:[^>]*>""").replace(s, "")
         // 2) 孤儿闭合标签：不配对的 </invoke> </parameter> </function_calls> 连串删掉
         //    （成对的 </tool_call> 已被解析器消化，这里针对的是解析剩下的孤儿）
-        s = Regex("""(?:\s*</(?:invoke|parameter|function_calls)>)+""").replace(s, "\n")
+        // 2) 孤儿闭合标签：</invoke>/</function_calls> 没有对应开标签，一律删；
+        //    </parameter> 只能删"多余的"——合法卡里成对的必须保留，
+        //    否则参数块失去闭合、参数全丢（LAUNCH_APP 报 package is empty 就是这个）
+        // 2) 只删我们没有开标签的孤儿闭合标签（</invoke>、</antml:...>）。
+        //    </parameter> 一律不碰：合法卡里成对的必须保留，否则参数全丢
+        //    （LAUNCH_APP 报 package is empty 就是把它误删造成的）
+        s = Regex("""(?:\s*</(?:invoke|function_calls)>)+""").replace(s, " ")
         // 3) 连续重复行复读：同一行连出 3 次以上 → 保留一行并截断后面的复读
         val out = StringBuilder()
         var prev: String? = null
