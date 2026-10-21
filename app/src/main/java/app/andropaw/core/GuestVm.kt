@@ -1058,6 +1058,23 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 Thread.sleep(3000)
                 // lmkd 按 adj 挑肥的杀：每轮顺手把 guest 进程树重新 pin 一遍（zygote 重启后有新 pid）
                 runCatching { protectProcessTree() }
+                // 临时状态快照：每约 18 秒记一次前台应用（恢复时拉回来）
+                if (System.currentTimeMillis() / 1000 % 18 == 0L) runCatching { snapshotGuestState() }
+                // 快速恢复判定：窗口内 zygote + surfaceflinger 都回来了 → 恢复成功
+                if (fastRecoveryUntil > 0) {
+                    if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) {
+                        fastRecoveryUntil = 0L
+                        sweepExitTimes.clear()
+                        log("✔ fast recovery complete — guest is alive again")
+                        writeRebootNotice("已自动恢复（无需冷重启）")
+                        Thread({ runCatching { restoreForeground() } }, "fast-restore").apply { isDaemon = true; start() }
+                        Thread.sleep(1500)
+                    }
+                    if (fastRecoveryUntil > 0 && System.currentTimeMillis() > fastRecoveryUntil) {
+                        fastRecoveryUntil = 0L
+                        log("✖ fast recovery timed out — cold reboot")
+                    }
+                }
                 // keep the session marker fresh: the home page and the AgentPaw page follow it, and
                 // a :vm process killed by the system stops beating, so the marker expires by itself
                 runCatching { VmSession.beat(ctx) }
@@ -1118,11 +1135,21 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         // 窗口收紧到 2.5 秒 / 3 个：MIUI 一失焦就清后台，早一步识别早一步自救
                         while (sweepExitTimes.isNotEmpty() && sweepExitTimes.first() < now - 2500) sweepExitTimes.removeFirst()
                         if (sweepExitTimes.size >= 3) {
+                            // 第一优先：不冷重启，让 guest init 自己把核心进程拉回来（通常 10-30 秒），
+                            // 恢复成功后把用户拉回原来的前台应用 —— 比整机冷启动快一个数量级
+                            if (fastRecoveryUntil == 0L && !sweepRebootTried) {
+                                fastRecoveryUntil = System.currentTimeMillis() + 45_000
+                                sweepExitTimes.clear()
+                                log("✖ mass SIGKILL — entering fast recovery: letting guest init restart zygote/surfaceflinger (deadline 45 s)")
+                                writeRebootNotice("检测到模拟器进程被宿主回收，正在自动恢复…（恢复失败才会冷重启）")
+                                continue@wd
+                            }
                             if (!sweepRebootTried) {
                                 sweepRebootTried = true
+                                fastRecoveryUntil = 0L
                                 sweepExitTimes.clear()
-                                log("✖ mass SIGKILL (≥4 processes in 4 s) — the guest is shutting itself down; cold-rebooting the machine once")
-                                writeRebootNotice("检测到 guest 进程成批被杀（宿主系统内存紧张时内核按重要性回收模拟器子进程），正在冷重启模拟器…\n\n建议：1) 设置里把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定；2) 把模拟器分辨率/内存调小可显著降低被回收的概率。")
+                                log("✖ fast recovery failed — cold-rebooting the machine once")
+                                writeRebootNotice("自动恢复未成功，正在冷重启模拟器…\n\n建议：1) 设置里把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定；2) 把模拟器分辨率/内存调小可显著降低被回收的概率。")
                                 onPower?.invoke(true, "")
                                 break@wd
                             }
@@ -1192,9 +1219,48 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     /** zygote 反复崩时的一次性整机自救已用过 */
     @Volatile private var zygoteRebootTried = false
-    /** 集群死亡自救已用过：4 秒内 >=4 个进程 137 = guest 发起关机/重启的 orderly shutdown */
+    /** 集群死亡自救已用过：冷重启兜底只做一次 */
     @Volatile private var sweepRebootTried = false
     private val sweepExitTimes = ArrayDeque<Long>()
+
+    /** 临时状态快照：最近一次正常时的前台包名（恢复后自动拉回来） */
+    @Volatile private var lastForegroundPkg: String? = null
+    /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
+    @Volatile private var fastRecoveryUntil = 0L
+
+    /** guest 里某个进程是否还活着（扫 /proc 的 cmdline，含 qemu 包装的 guest 二进制名） */
+    private fun guestProcAlive(name: String): Boolean =
+        File("/proc").listFiles()?.any { d ->
+            d.name.toIntOrNull() != null && runCatching {
+                String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1)
+            }.getOrNull()?.contains("/$name") == true
+        } ?: false
+
+    /** 记录前台应用：每隔一段时间跑一次 dumpsys，集群死亡后据此把用户拉回原来的界面 */
+    private fun snapshotGuestState() {
+        if (stopping || state != State.RUNNING || bootDoneAt == 0L) return
+        runCatching {
+            val (_, out) = kotlinx.coroutines.runBlocking {
+                guestRunner.run(listOf("/system/bin/sh", "-c",
+                    "$shellPrefix dumpsys window windows 2>/dev/null | grep -m1 mCurrentFocus"), 6000)
+            }
+            // 形如：mCurrentFocus=Window{... u0 com.android.settings/com.android.settings.Settings}
+            val m = Regex("""u0\s+([A-Za-z0-9_.]+)/""").find(out)
+            m?.groupValues?.getOrNull(1)?.let { lastForegroundPkg = it }
+        }
+    }
+
+    /** 快速恢复成功后把用户拉回原来的应用 */
+    private fun restoreForeground() {
+        val pkg = lastForegroundPkg ?: return
+        runCatching {
+            kotlinx.coroutines.runBlocking {
+                guestRunner.run(listOf("/system/bin/sh", "-c",
+                    "$shellPrefix monkey -p $pkg -c android.intent.category.LAUNCHER 1"), 15_000)
+            }
+            log("fast recovery: relaunched $pkg")
+        }
+    }
 
     /** 机器级重启的跨 Activity 提示（主页面与模拟器页都轮询这个文件） */
     private fun writeRebootNotice(reason: String) {
@@ -1426,6 +1492,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         frozenAnnounced = false
         zygoteRebootTried = false
         sweepRebootTried = false
+        fastRecoveryUntil = 0L
         clearRebootNotice()
         setState(State.STOPPING)
         log("stopping system")
