@@ -95,7 +95,17 @@ class AgentVmBridge(
         }
         val prefix = "export PATH=/system/bin:/system/xbin:\$PATH; ${toolWrappers(paths)}"
         val runner = GuestRunner(paths, img)
-        runner.run(listOf("/system/bin/sh", "-c", prefix + cmd), timeoutMs)
+        // 打开 qemu 日志：信号 11 这类崩溃只有 qemu 自己的 stderr 能说明原因（缺库/非法指令/…）
+        runner.qemuLog = true
+        val (code, out) = runner.run(listOf("/system/bin/sh", "-c", prefix + cmd), timeoutMs)
+        if (code != 0 && out.contains("signal 11")) {
+            // 附上 qemu 的日志尾部，下一次失败就能直接看到真正的原因
+            val logTail = runCatching {
+                File(paths.bin, "qemu-sh.log").readLines().takeLast(12).joinToString(" | ")
+            }.getOrDefault("")
+            return@withContext (code to (out + (if (logTail.isNotBlank()) " [qemu] " + logTail else "")))
+        }
+        code to out
     }
 
     // ------------------------------------------------------------------ screenshot
