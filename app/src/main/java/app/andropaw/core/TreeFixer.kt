@@ -1893,6 +1893,9 @@ class TreeFixer(
      * framework 重新 boot（快得多），我们的恢复链才有意义。原始文件留备份。
      */
     private fun dropZygoteCritical() {
+        // 只对 4.x（QEMU 引擎）动 init.rc：5.0+ 是原生引擎，critical 是 AOSP 标准配置，
+        // 改了反而可能影响 init 的服务管理（实测 5.0+ boot 阶段出现成批 134/137）
+        if (img.api >= 21) return
         runCatching {
             val rc = File(root, "init.rc")
             if (!rc.isFile) return
