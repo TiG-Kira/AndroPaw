@@ -61,9 +61,9 @@ android {
         // 28: гостевые бинарники запускаются из каталога данных приложения (W^X для targetSdk>=29)
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 65
+        versionCode = 66
         // 0.1.0 起恢复 semver 标准三段格式（此前是 0.0.0.x 四段）
-        versionName = "0.5.5"
+        versionName = "0.5.6"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 

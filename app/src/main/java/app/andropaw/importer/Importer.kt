@@ -175,6 +175,15 @@ class Importer(
         } finally {
             if (gotSystem) whole.delete()   // 失败时留着，下面要读条目清单
         }
+        // 导入分布报告：zip 顶层目录的文件数——漏没漏目录一眼可查
+        runCatching {
+            val dist = java.util.zip.ZipFile(whole).use { z ->
+                z.entries().asSequence().filter { !it.isDirectory && !it.name.startsWith("META-INF/") }
+                    .groupingBy { it.name.substringBefore('/') }.eachCount()
+            }
+            if (dist.isNotEmpty()) log("import: extracted - " +
+                dist.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.key}=${it.value}" })
+        }
         // 找不到系统镜像时必须失败，而不是"立刻完成"（用户看到的是装完一片空白 + firmware tree missing）。
         // 顺带把包内结构打进日志，特殊打包方式的包才能被定位。
         if (!gotSystem) {
@@ -247,6 +256,13 @@ class Importer(
                 n.startsWith("system/") -> {
                     zip.getInputStream(e).use { writeFile(n, it, e.unixMode.takeIf { m -> m != 0 }) }
                     gotSystem = true
+                }
+                // 厂商定制固件的顶层目录（MIUI 的 cust/、OPPO/vivo 的 oem/、Treble 的 vendor/、
+                // product/odm/、以及 app/ priv-app/ framework/ lib/ bin/ etc/ usr/ …）。
+                // 此前这些目录没有任何分支，被静默丢弃——它们的服务/库启动时找不到，
+                // 进而 zygote exec system_server 失败、全批服务死亡（那根追了很久的 137）。
+                n.matches(Regex("(?i)(vendor|odm|oem|cust|product|op_product|app|priv-app|framework|lib|lib64|bin|etc|usr|xbin|sbin|vendor_otg)/.*")) -> {
+                    zip.getInputStream(e).use { writeFile(n, it, e.unixMode.takeIf { m -> m != 0 }) }
                 }
                 base.equals("boot.img", true) -> zip.getInputStream(e).use { takeBoot(it.readBytes()) }
                 base.equals("recovery.img", true) && e.size < 64_000_000 -> zip.getInputStream(e).use { recovery = it.readBytes() }
