@@ -319,6 +319,14 @@ fun GlassMenuButton(
 fun RebootNoticeHost() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var reason by remember { mutableStateOf<String?>(null) }
+    var liveTail by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        val live = java.io.File(ctx.filesDir, "vm-live.log")
+        while (true) {
+            liveTail = runCatching { live.readLines().takeLast(8) }.getOrDefault(emptyList())
+            kotlinx.coroutines.delay(800)
+        }
+    }
     LaunchedEffect(Unit) {
         val f = java.io.File(ctx.filesDir, "reboot_notice.json")
         while (true) {
@@ -331,6 +339,24 @@ fun RebootNoticeHost() {
         }
     }
     reason?.let { r ->
-        MiuixDialog(show = true, title = "正在重启模拟器", summary = r, onDismissRequest = {}) {}
+        MiuixDialog(show = true, title = "正在重启模拟器", summary = r, onDismissRequest = {}) {
+            androidx.compose.foundation.layout.Column(
+                androidx.compose.ui.Modifier.fillMaxWidth()
+                    .background(androidx.compose.ui.graphics.Color(0xFF1E1E1E), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+            ) {
+                liveTail.forEach { line ->
+                    androidx.compose.material3.Text(
+                        line, fontSize = 10.sp, maxLines = 1,
+                        color = when {
+                            line.contains("✔") || line.contains("complete") -> androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                            line.contains("✖") || line.contains("timed out") -> androidx.compose.ui.graphics.Color(0xFFEF5350)
+                            else -> androidx.compose.ui.graphics.Color(0xFFB0B0B0)
+                        },
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    )
+                }
+            }
+        }
     }
 }

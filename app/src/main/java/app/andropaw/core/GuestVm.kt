@@ -83,6 +83,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun log(s: String) {
         val line = "${stamp()} $s"
         lines.add(line)
+        runCatching {
+            val live = File(ctx.filesDir, "vm-live.log")
+            val tail = (if (live.isFile) live.readLines().takeLast(119) else emptyList()) + line
+            live.writeText(tail.joinToString(10.toChar().toString()))
+        }
         while (lines.size > 2000) lines.removeAt(0)
         runCatching {
             if (engine == Engine.N64 && kernel.syncLog) FileOutputStream(logFile, true).use { it.write((line + "\n").toByteArray()); it.fd.sync() }
@@ -1075,8 +1080,20 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         Thread.sleep(1500)
                     }
                     if (fastRecoveryUntil > 0 && System.currentTimeMillis() > fastRecoveryUntil) {
+                        // 超时必须真的兜底：此前只打了一行日志（进程已全死、不会再冒新 137 去命中
+                        // 冷重启分支），于是既不恢复也不重启，弹窗一直挂着
                         fastRecoveryUntil = 0L
-                        log("✖ fast recovery timed out — cold reboot")
+                        if (!sweepRebootTried) {
+                            sweepRebootTried = true
+                            log("✖ fast recovery timed out after 45 s — cold reboot")
+                            writeRebootNotice("自动恢复未成功，正在冷重启模拟器…；建议把 AndroPaw 设为「省电策略 → 无限制」并在最近任务锁定。")
+                            onPower?.invoke(true, "")
+                            break@wd
+                        }
+                        log("✖ fast recovery timed out again — giving up")
+                        failure = "guest core processes die in batches (code 137) and do not come back"
+                        setState(State.FAILED)
+                        break@wd
                     }
                 }
                 // keep the session marker fresh: the home page and the AgentPaw page follow it, and
