@@ -1121,6 +1121,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 }
                 // （桥挽救已撤：反复"拉桥→唤醒→掉→再拉"会形成无限循环，把能启动的固件也拖垮。
                 //  现在只监听——桥死了交给用户决策：snackbar 里选等待自救或冷重启。）
+                // 用户点过「等待自救」：30 秒后 zygote 仍未回来就再弹一次（如此反复）
+                runCatching {
+                    val nowCk = System.currentTimeMillis()
+                    if (lastMassDeathNotice > 0 && nowCk - lastMassDeathNotice > 30_000 && !guestProcAlive("zygote")) {
+                        lastMassDeathNotice = nowCk
+                        log("✖ still down 30 s after 'wait' - asking the user again")
+                        onMassDeath?.invoke(1)
+                    }
+                }
                 // 死前体检：zygote/system_server 的 pid、RSS、adj。被宿主 lmkd 杀时，最后一条
                 // 记录就是"尸体数据"，能直接判断是不是"只认它大"（RSS 越高越可疑）
                 runCatching {
@@ -1358,14 +1367,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             }
             override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
         }
-        repeat(4) { attempt ->
-            runCatching { ctx.bindService(it, probe, android.content.Context.BIND_AUTO_CREATE or 0x00000040) }
-            if (latch.await(1500, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                log("bridge host: connected (attempt " + (attempt + 1) + ") - bridges + core services run under a foreground service")
+        repeat(5) { attempt ->
+            val bound = runCatching { ctx.bindService(it, probe, android.content.Context.BIND_AUTO_CREATE or 0x00000040) }.isSuccess
+            log("bridge host: bind attempt " + (attempt + 1) + " bound=" + bound + " host=" + (if (bridgeHost == null) "null" else "set"))
+            if (latch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                log("bridge host: connected on attempt " + (attempt + 1) + " - zygote runs under a foreground service")
                 return
             }
         }
-        log("bridge host: unreachable after 4 attempts - falling back to local spawn")
+        log("bridge host: UNREACHABLE after 5 attempts - zygote falls back to local spawn (no FGS)")
     }
 
     /** 同步调用桥宿主，返回 reply 的 arg1（超时/失败 -1） */
@@ -1397,7 +1407,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
         val pid = bridgeCall(1, b)
         if (pid > 0) { log("· $name started (bridge host pid=$pid)"); return }
-        log("· $name: bridge host unavailable, local spawn")
+        log("· $name: bridge host FAILED (host=" + (if (bridgeHost == null) "null" else "set") + ") - local spawn")
         spawn(name, cmd, env)
     }
 
