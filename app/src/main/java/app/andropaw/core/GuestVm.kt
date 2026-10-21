@@ -207,6 +207,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         ))
         bootAt = System.currentTimeMillis()
         val p = pb.start()
+        // 立刻 pin：内核 lmkd 就在这几十毫秒里挑"最肥的无名进程"，晚一步 zygote 就没了
+        runCatching {
+            val pid = Process::class.java.getMethod("pid").invoke(p) as? Int ?: -1
+            if (pid > 0) pinGuest(pid)
+        }
         synchronized(procs) { procs["recovery"] = p }
         setState(State.RUNNING)
         log("recovery started (${w}x$h)")
@@ -755,6 +760,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             pb.redirectInput(File("/dev/null")).redirectOutput(ProcessBuilder.Redirect.appendTo(log))
         }
         val p = pb.start()
+        // 立刻 pin：内核 lmkd 就在这几十毫秒里挑"最肥的无名进程"，晚一步 zygote 就没了
+        runCatching {
+            val pid = Process::class.java.getMethod("pid").invoke(p) as? Int ?: -1
+            if (pid > 0) pinGuest(pid)
+        }
         synchronized(procs) { procs[name] = p }
         pidOf(p)?.let { pgids.add(it) }
         log("· $name started")
@@ -1046,6 +1056,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             var restarts = HashMap<String, Int>()
             wd@ while (!stopping) {
                 Thread.sleep(3000)
+                // lmkd 按 adj 挑肥的杀：每轮顺手把 guest 进程树重新 pin 一遍（zygote 重启后有新 pid）
+                runCatching { protectProcessTree() }
                 // keep the session marker fresh: the home page and the AgentPaw page follow it, and
                 // a :vm process killed by the system stops beating, so the marker expires by itself
                 runCatching { VmSession.beat(ctx) }
@@ -1493,9 +1505,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         File("/proc").listFiles()?.forEach { d ->
             val pid = d.name.toIntOrNull() ?: return@forEach
             if (pid == mine) return@forEach
-            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
+            val cmd = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1).replace('\u0000', ' ') }.getOrNull() ?: return@forEach
             val isHelper = cmd.startsWith("${ctx.packageName}:binder") || cmd.startsWith("${ctx.packageName}:gl")
-            if (isHelper || descendants.contains(pid)) { writeOomScore(pid, PROTECTED_OOM_ADJ); pinned++ }
+            // 祖先链之外再按命令行特征兜底：跑我们镜像 / qemu / binderd 的进程一律算自己人，
+            // 防止任何脱离 :vm 父链的进程（例如被 guest init 重新挂接的）漏出保护
+            val isOurs = cmd.contains("libaemu64") || cmd.contains("/images/") &&
+                (cmd.contains("libqemu") || cmd.contains("libbinderd") || cmd.contains("libdhdrun") || cmd.contains("libglserverd") || cmd.contains("aemu"))
+            if (isHelper || isOurs || descendants.contains(pid)) { pinGuest(pid); pinned++ }
         }
         // 让 pin 的结果可见：成功 N 个 / 失败说明被 SELinux 或宿主策略拦了（那时只能靠系统白名单）
         if (pinned != lastPinned) {
@@ -1508,19 +1524,27 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * 所以非 root 宿主上这一 pin 同样生效；真失败（SELinux 拦截等）记一次日志后静默继续。 */
     @Volatile private var oomUnsupported = false
 
-    private fun writeOomScore(pid: Int, adj: Int) {
-        runCatching {
+    /** 给 guest 进程 pin 分数：-1000（never kill）写不进去就退 -900、-800，至少低于普通应用 */
+    private fun pinGuest(pid: Int) {
+        for (adj in intArrayOf(PROTECTED_OOM_ADJ, -900, -800)) {
+            if (writeOomScore(pid, adj)) return
+        }
+    }
+
+    private fun writeOomScore(pid: Int, adj: Int): Boolean {
+        val ok = runCatching {
             val fd = android.system.Os.open("/proc/$pid/oom_score_adj", android.system.OsConstants.O_WRONLY, 0)
             try {
                 val b = adj.toString().toByteArray()
                 android.system.Os.write(fd, b, 0, b.size)
             } finally { android.system.Os.close(fd) }
-        }.onFailure {
-            if (!oomUnsupported) {
-                oomUnsupported = true
-                log("oom: cannot pin oom_score_adj (needs root); relying on foreground-service importance on this host")
-            }
+            true
+        }.getOrElse { false }
+        if (!ok && !oomUnsupported) {
+            oomUnsupported = true
+            log("oom: cannot pin oom_score_adj (host policy / SELinux refused); falling back to the highest value the kernel allows")
         }
+        return ok
     }
 
     /** Re-pin the guest process tree every few seconds so freshly spawned helpers stay protected. */
