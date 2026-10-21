@@ -1141,17 +1141,34 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         if (sweepExitTimes.size >= 3) {
                             // 第一优先：不冷重启，让 guest init 自己把核心进程拉回来（通常 10-30 秒），
                             // 恢复成功后把用户拉回原来的前台应用 —— 比整机冷启动快一个数量级
-                            if (fastRecoveryUntil == 0L && !sweepRebootTried) {
-                                fastRecoveryUntil = System.currentTimeMillis() + 30_000
+                            val nowMs = System.currentTimeMillis()
+                            // 恢复窗口内：死进程是持续冒出来的，每一轮都会再命中 sweep——
+                            // 此前这里直接落到冷重启分支（"几秒就被冷重启"），窗口形同虚设。
+                            // 窗口内一律忽略新的 sweep，交给恢复线程和超时判定。
+                            if (fastRecoveryUntil > 0 && nowMs < fastRecoveryUntil) {
                                 sweepExitTimes.clear()
-                                log("✖ mass SIGKILL — rebuilding the core process tree immediately (no guest OS restart)")
-                                writeRebootNotice("检测到模拟器进程被宿主回收，正在重建核心进程并恢复…")
+                                continue@wd
+                            }
+                            if (fastRecoveryUntil == 0L && !sweepRebootTried) {
+                                fastRecoveryUntil = nowMs + 45_000
+                                sweepExitTimes.clear()
+                                log("✖ mass SIGKILL — waiting for init to bring zygote/surfaceflinger back (45 s window)")
+                                writeRebootNotice("检测到模拟器进程被宿主回收，正在自动恢复…（恢复失败才会冷重启）")
                                 // 不抢 init 的重启（抢会双实例抢 binder 全废）：init 已因 zygote 去掉 critical
                                 // 而只重启 zygote、不 reboot 系统；这里等它把 zygote/sf 拉回来再恢复前台
                                 Thread({
-                                    val deadline = System.currentTimeMillis() + 18_000
+                                    val deadline = System.currentTimeMillis() + 40_000
                                     while (System.currentTimeMillis() < deadline) {
-                                        if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) break
+                                        if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) {
+                                            // 稳定 3 秒才算真的回来了（起一下又死不算恢复）
+                                            val okUntil = System.currentTimeMillis() + 3000
+                                            var stable = true
+                                            while (System.currentTimeMillis() < okUntil) {
+                                                Thread.sleep(500)
+                                                if (!guestProcAlive("zygote")) { stable = false; break }
+                                            }
+                                            if (stable) break
+                                        }
                                         Thread.sleep(1000)
                                     }
                                     runCatching { if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) restoreForeground() }
