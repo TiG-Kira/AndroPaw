@@ -1152,7 +1152,6 @@ class VmActivity : ComponentActivity() {
                     Text(vm.failure ?: "", fontSize = 14.sp, color = MiuixTheme.colorScheme.error)
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(text = "查看日志", onClick = { showLog = true })
                         TextButton(text = stringResource(R.string.close), onClick = { stopVm() })
                         Button(onClick = { thread { vm.stop(); vm.boot() } }) { Text(stringResource(R.string.retry)) }
                     }
