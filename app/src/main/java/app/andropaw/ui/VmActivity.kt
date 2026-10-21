@@ -917,22 +917,6 @@ class VmActivity : ComponentActivity() {
                 add(GlassMenuItem(stringResource(R.string.shutdown), Icons.Rounded.Close) { stopVm() })
             }
 
-            // top menu button (hidden while the log is open so it does not cover the log toolbar); drag to move it
-            if (!showLog && !showTerm) Box(Modifier.align(Alignment.TopEnd).displayCutoutPadding().statusBarsPadding().padding(8.dp)
-                .offset { IntOffset(menuOffset.x.roundToInt(), menuOffset.y.roundToInt()) }
-                .pointerInput(Unit) {
-                    detectDragGestures(onDragEnd = { saveMenuOffset() }) { ch, d -> ch.consume(); menuOffset = clamp(menuOffset + d) }
-                }) {
-                // the button half of the old GlassMenuButton: the panel is not in here - this box is
-                // only 40 dp, and that used to be the whole page the menu laid itself out on
-                Box(
-                    Modifier.size(40.dp).clip(CircleShape).clickable { menuOpen = true }
-                        .onGloballyPositioned { menuIcon = it.boundsInRoot() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.MoreVert, stringResource(R.string.menu), tint = MiuixTheme.colorScheme.onSurface)
-                }
-            }
 
             when (dialog) {
                 Dlg.SMS -> SmsDialog { dialog = Dlg.NONE }
@@ -943,29 +927,19 @@ class VmActivity : ComponentActivity() {
                 Dlg.NONE -> {}
             }
 
-            // панель кнопок Android
-            if (vm.settings.showNavBar && !showLog && !showTerm) {
-                NavBar(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp))
+            // 统一浮动工具栏：菜单 + AgentPaw + （可选）Android 按键，位置与旧按键栏一致
+            if (!showLog && !showTerm) {
+                FloatingToolbar(
+                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                        .padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp),
+                    showKeys = vm.settings.showNavBar,
+                    agentEnabled = running,
+                    onMenu = { menuOpen = true },
+                    onMenuBounds = { r -> menuIcon = r },
+                    onAgent = { agentOpen = true },
+                )
             }
 
-            // AgentPaw: a small floating button while it is closed, the chat card when open —
-            // bottom end, above the guest's own nav bar, never covering the middle of the screen
-            if (running && !agentOpen && !showLog && !showTerm) {
-                Box(
-                    Modifier
-                        .align(Alignment.BottomEnd)
-                        .navigationBarsPadding()
-                        .padding(end = 12.dp, bottom = 12.dp)
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))
-                        .clickable { agentOpen = true },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_chat_title),
-                        Modifier.size(20.dp), tint = MiuixTheme.colorScheme.primary)
-                }
-            }
             if (agentOpen) {
                 app.andropaw.agent.AgentChatOverlay(
                     bridge = agentBridge,
@@ -974,7 +948,7 @@ class VmActivity : ComponentActivity() {
                         .align(Alignment.BottomEnd)
                         .imePadding()
                         .navigationBarsPadding()
-                        .padding(end = 12.dp, bottom = 12.dp),
+                        .padding(end = 12.dp, bottom = 72.dp),
                 )
             }
 
@@ -999,16 +973,54 @@ class VmActivity : ComponentActivity() {
         }
     }
 
-    /** The bar of guest buttons: the user's own set, each held down in the guest for as long as it is held here. */
+    /**
+     * 统一的浮动工具栏：菜单按钮 + AgentPaw 按钮，Android 按键栏开启时在后面接上按键。
+     * 位置固定在旧的按键栏处（底部居中）；按键栏关闭时只剩菜单与 Agent 两个按钮。
+     */
     @Composable
-    private fun NavBar(modifier: Modifier) {
+    private fun FloatingToolbar(
+        modifier: Modifier,
+        showKeys: Boolean,
+        agentEnabled: Boolean,
+        onMenu: () -> Unit,
+        onMenuBounds: (androidx.compose.ui.geometry.Rect) -> Unit,
+        onAgent: () -> Unit,
+    ) {
         val compact = vm.settings.navSize == 0
-        val keys = remember { vm.settings.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL } }
-        if (keys.isEmpty()) return
+        val keys = remember(showKeys) {
+            if (!showKeys) emptyList()
+            else vm.settings.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL }
+        }
+        val btn = if (compact) 36.dp else 48.dp
         Box(modifier.clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))) {
-            Row(Modifier.padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 2.dp else 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp)) {
-                for (k in keys) NavKey(k, if (compact) 36.dp else 48.dp)
+            Row(
+                Modifier.padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 2.dp else 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 菜单
+                Box(
+                    Modifier.size(btn).clip(CircleShape).clickable { onMenu() }
+                        .onGloballyPositioned { onMenuBounds(it.boundsInRoot()) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.MoreVert, stringResource(R.string.menu),
+                        Modifier.size(if (compact) 18.dp else 22.dp), tint = MiuixTheme.colorScheme.onSurface)
+                }
+                // AgentPaw
+                Box(
+                    Modifier.size(btn).clip(CircleShape).clickable(enabled = agentEnabled) { if (agentEnabled) onAgent() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_chat_title),
+                        Modifier.size(if (compact) 18.dp else 22.dp),
+                        tint = if (agentEnabled) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                }
+                if (keys.isNotEmpty()) {
+                    Box(Modifier.size(width = 1.dp, height = if (compact) 18.dp else 24.dp)
+                        .background(MiuixTheme.colorScheme.onSurface.copy(alpha = 0.15f)))
+                    for (k in keys) NavKey(k, btn)
+                }
             }
         }
     }
