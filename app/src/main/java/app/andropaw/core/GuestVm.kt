@@ -1105,6 +1105,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 val dead = synchronized(procs) { procs.filter { !it.value.isAlive }.keys.toList() }
                 for (name in dead) {
                     if (stopping) break
+                    // 恢复窗口内不再对任何死亡事件做重启动作：否则同一批死亡里 surfaceflinger 的
+                    // "restart the system" 分支会 SIGKILL zygote、zygote 分支又重启系统，恢复必被打断。
+                    // 窗口内一切交给恢复线程与超时兜底。
+                    if (fastRecoveryUntil > 0) continue
                     val p = synchronized(procs) { procs[name] } ?: continue
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
