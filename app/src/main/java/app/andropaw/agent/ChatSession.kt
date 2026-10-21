@@ -223,7 +223,12 @@ object ChatSession {
                         }
                         is LlmChunk.Delta -> {
                             replyText += chunk.text
-                            updateStream(streamMsgId) { it.copy(content = replyText) }
+                            // 模型开始写 <tool_call> 而尚未闭合时，原文先别亮出来：
+                            // 显示"技能准备中"，流结束后由卡片接管（Termux-Ultra 同款体验）
+                            val preparing = replyText.contains("<tool_call") && !replyText.contains("</tool_call>")
+                            updateStream(streamMsgId) {
+                                it.copy(content = if (preparing) "… 正在准备技能" else replyText)
+                            }
                         }
                         LlmChunk.Done -> Unit
                     }
