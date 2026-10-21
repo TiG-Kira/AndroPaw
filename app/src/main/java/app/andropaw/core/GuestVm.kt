@@ -1180,6 +1180,20 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 Thread({
                                     val deadline = System.currentTimeMillis() + 40_000
                                     while (System.currentTimeMillis() < deadline) {
+                                        // 日志证据：冻结 30 秒后全机只剩 2 个 guest 进程——init 试过几次
+                                        // 就放弃（服务被标记 disabled），不会再拉起。它不干，我们自己拉起。
+                                        if (!guestProcAlive("surfaceflinger")) {
+                                            spawnSpecs["surfaceflinger"]?.let { sp ->
+                                                log("fast recovery: init gave up on surfaceflinger, spawning it")
+                                                runCatching { spawn("surfaceflinger", sp.first, sp.second) }
+                                            }
+                                        }
+                                        if (!guestProcAlive("zygote")) {
+                                            spawnSpecs["zygote"]?.let { sp ->
+                                                log("fast recovery: init gave up on zygote, spawning it")
+                                                runCatching { spawn("zygote", sp.first, sp.second) }
+                                            }
+                                        }
                                         if (guestProcAlive("zygote") && guestProcAlive("surfaceflinger")) {
                                             // 稳定 3 秒才算真的回来了（起一下又死不算恢复）
                                             val okUntil = System.currentTimeMillis() + 3000
