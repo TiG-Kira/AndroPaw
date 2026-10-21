@@ -602,7 +602,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 glUp(); glDone = true
             }
             // 10+: the package manager requires apexd's binder service, which is there once apexd reports "ready"
-            if (svc.name == "zygote") checkFirmwareIntegrity()   // zygote 启动前先验货，缺文件一次说清
+            if (svc.name == "zygote") {
+                checkFirmwareIntegrity()   // 关键文件（boot.art/framework.jar/…）
+                checkServicePlan()         // 计划服务的二进制是否齐全
+            }
             if (svc.name == "zygote" && engine == Engine.N64 && plan.any { it.name == "apexd" })
                 waitFor("apexd", 15_000) { props.get("apexd.status") == "ready" }
             // 4.2+: заглушка bluetooth_manager до зиготы (system_server с ro.kernel.qemu=1 свою не поднимает)
@@ -778,12 +781,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private val spawnSpecs = java.util.concurrent.ConcurrentHashMap<String, Pair<List<String>, Map<String, String>>>()
 
     /** 无对应硬件的厂商守护进程：起不来或空转，只会吃内存（4.4/6.0 的 zygote 被 OOM 杀就是它们挤出来的） */
-    // 注意：qmuxd / rfs_access / qcomsysd 不能跳——它们创建 /dev/socket/qmux_radio/* 等 QMI socket，
-    // 跳掉后 loc/gsiff/gpsone 整条位置链报 "No such file or directory" 起不来（0.4.0 的回归）。
-    private val VENDOR_SKIP = setOf(
-        "fdpp", "msqasd", "dpmpd", "atfwd", "imsqmidaemon",
-        "displayfeature", "loc_launcher", "mm-pp-daemon", "qcom-cnd", "thermal-engine",
-    )
+    // 厂商守护进程一律不跳：MIUI / ColorOS 等定制 ROM 的服务依赖无法预测，
+    // 跳过任何一个都可能让 framework 连锁崩溃（zygote exec system_server 失败 → 全批 service died）。
+    // 省内存改用其它手段（分辨率 / 堆大小），不从"少起服务"下手。
+    private val VENDOR_SKIP: Set<String> = emptySet()
 
     private fun spawn(name: String, cmd: List<String>, env: Map<String, String>) {
         spawnSpecs[name] = cmd to env
@@ -1204,11 +1205,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         }
                         if (state != State.FAILED && bootDoneAt == 0L && !(everBooted && zygoteRestarts < 6)) {
                             val missing = runCatching { checkFirmwareIntegrity() }.getOrDefault(emptyList())
+                            val svcMissing = runCatching { checkServicePlan() }.getOrDefault(emptyList())
                             failure = "$name exited (code $code)" + if (code == 137) {
-                                if (missing.isNotEmpty())
-                                    " — firmware is incomplete (${missing.size} key file(s) missing, see the host log); the guest shut its own VM down"
-                                else
-                                    " — system_server died while zygote was execing it and the guest shut the VM down (see the guest log)"
+                                when {
+                                    missing.isNotEmpty() || svcMissing.isNotEmpty() ->
+                                        " — firmware incomplete: ${missing.size} key file(s) + ${svcMissing.size} planned service(s) missing (see the host log); the guest shut its own VM down"
+                                    else ->
+                                        " — system_server died while zygote was execing it and the guest shut the VM down (see the guest log)"
+                                }
                             } else ""
                             if (code == 137 && guestLogHas("No original dex files found"))
                                 failure = "system_server cannot start: the precompiled code of the framework (system/framework/oat) is missing from this container — import the firmware again"
@@ -1367,6 +1371,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * 之后直接 Shutting down VM —— 这是 guest 自己缺文件/坏文件的连锁崩溃，不是外部清理。
      * 在 zygote 启动前把缺的关键文件一次说清。
      */
+    /** init.rc 计划里 argv 文件缺失、因而会被跳过的服务（厂商 ROM 的高发区，启动崩溃的常见起因） */
+    private fun checkServicePlan(): List<String> {
+        val plan = runCatching { servicePlan() }.getOrNull() ?: return emptyList()
+        val missing = plan.filter { !it.onDemand }.filter { svc ->
+            val p = svc.argv.firstOrNull() ?: return@filter false
+            !File(paths.root, p.removePrefix("/")).isFile
+        }
+        if (missing.isEmpty()) {
+            log("service plan: every planned binary is present (${plan.count { !it.onDemand }} services)")
+        } else {
+            log("service plan: ${missing.size} planned service(s) will be SKIPPED (binary missing):")
+            missing.forEach { log("   ? ${it.name} -> ${it.argv.firstOrNull()}") }
+        }
+        return missing.map { it.name }
+    }
+
     private fun checkFirmwareIntegrity(): List<String> {
         val root = paths.root
         val api = img.api
