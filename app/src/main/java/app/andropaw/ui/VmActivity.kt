@@ -180,6 +180,7 @@ class VmActivity : ComponentActivity() {
     /** this system's setting "Notification light" (the settings sheet changes it while the system runs) */
     private var showLed by mutableStateOf(true)
     private var guestTopPx by mutableStateOf(0)
+    private val massDeathNotice = mutableStateOf(false)
     private val logLines = mutableStateListOf<String>()
 
     @SuppressLint("ClickableViewAccessibility")
@@ -203,6 +204,8 @@ class VmActivity : ComponentActivity() {
         vm = if (cur != null && cur.img.id == img.id) cur
             else GuestVm(applicationContext, img).also { it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.vm = it }
         vm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+        // 大量 137：只提示，不擅自恢复（用户决策）
+        vm.onMassDeath = { runOnUiThread { massDeathNotice.value = true } }
         // 软重启会换掉 surfaceflinger：让显示视图重新绑定，避免画面停在旧帧
         vm.onScreenReset = {
             runCatching {
@@ -932,6 +935,29 @@ class VmActivity : ComponentActivity() {
                 Dlg.ADB -> AdbDialog { dialog = Dlg.NONE }
                 Dlg.DEVICE -> DeviceDialog { dialog = Dlg.NONE }
                 Dlg.NONE -> {}
+            }
+
+            // 大量进程退出的询问条（工具栏上方）：等待自救 / 冷重启
+            if (massDeathNotice.value) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+                        .padding(bottom = if (vm.settings.navSize == 0) 56.dp else 76.dp, start = 12.dp, end = 12.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHighest)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Column {
+                        Text("检测到模拟器进程成批退出", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text("可以让 guest 的 init 自行恢复，或直接冷重启机器。",
+                            fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(text = "等待自救", onClick = { massDeathNotice.value = false })
+                            TextButton(text = "冷重启", onClick = { massDeathNotice.value = false; rebootVm() })
+                        }
+                    }
+                }
             }
 
             // 统一浮动工具栏：菜单 + AgentPaw + （可选）Android 按键，位置与旧按键栏一致

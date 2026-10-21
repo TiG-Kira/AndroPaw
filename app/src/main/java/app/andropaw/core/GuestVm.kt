@@ -1277,27 +1277,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 之前只认 bootDoneAt，属性没收到时恢复逻辑就彻底失效、系统直接卡死
         (bootDoneAt > 0 || state == State.RUNNING || System.currentTimeMillis() - created > 90_000)) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
-                            val sinceLast = System.currentTimeMillis() - lastSoftRebootAt
-                            if (sinceLast > 45_000) {
-                                lastSoftRebootAt = System.currentTimeMillis()
-                                log("✖ mass SIGKILL — soft reboot (no cold restart, page stays)")
-                                writeRebootNotice("检测到模拟器进程成批死亡，正在软重启（不退出页面）…")
-                                Thread({
-                                    runCatching {
-                                        killGuestPrograms()
-                                        Thread.sleep(700)
-                                        cleanStaleSockets()
-                                        replayServicePlan()
-                                        Thread.sleep(1200)
-                                        refreshDisplayCompletely()
-                                        restoreForeground()
-                                        clearRebootNotice()
-                                        log("✔ soft reboot finished")
-                                    }.onFailure { log("✖ soft reboot failed: ${it.message}") }
-                                }, "soft-reboot").apply { isDaemon = true; start() }
-                                continue@wd
+                            // 只监听 + 通知：不再自动软重启（用户决策——选择权交回用户，snackbar 里选）
+                            val now2 = System.currentTimeMillis()
+                            if (now2 - lastMassDeathNotice > 30_000) {
+                                lastMassDeathNotice = now2
+                                log("✖ mass SIGKILL — not acting on it; asking the user (snackbar)")
+                                runCatching { onMassDeath?.invoke(3) }
                             }
-                            log("✖ mass SIGKILL again after a soft reboot — leaving it to the user")
                         }
                         continue@wd
                     }
@@ -1520,7 +1506,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         log("soft reboot: display refreshed")
     }
 
-    /** 画面重置钩子：软重启会换掉 surfaceflinger 实例，宿主侧的显示通路必须跟着重绑 */
+    /** 检测到大量退出时通知 UI（snackbar：等待自救 / 冷重启） */
+    @Volatile var onMassDeath: ((count: Int) -> Unit)? = null
+    /** 大量退出通知防抖 */
+    @Volatile private var lastMassDeathNotice = 0L
+    /** 画面重置钩子：zygote 挽救后重绑显示通路 */
     @Volatile var onScreenReset: (() -> Unit)? = null
 
     /**
@@ -1862,6 +1852,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         lastSoftRebootAt = 0L
         lastZygoteRespawnAt = 0L
         zygoteBootTries = 0
+        lastMassDeathNotice = 0L
         fastRecoveryUntil = 0L
         clearRebootNotice()
         setState(State.STOPPING)
