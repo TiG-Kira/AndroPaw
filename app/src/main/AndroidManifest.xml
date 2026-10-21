@@ -43,17 +43,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.AndroPaw"
         tools:targetApi="28">
-    <!-- 桥进程承载进程（:bridge）：独立进程 + 前台服务，ROM 的后台清理跳过前台进程，
-         桥进程才不会被扫掉（否则 guest 的 binder/GL 桥一断，整个系统跟着崩） -->
-    <service
-        android:name="app.andropaw.core.BridgeHostService"
-        android:process=":bridge"
-        android:exported="false"
-        android:foregroundServiceType="specialUse">
-        <property
-            android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-            android:value="模拟器桥进程承载（binderd/glserverd 被系统清理会导致 guest 崩溃）" />
-    </service>
 
 
         <activity

@@ -273,7 +273,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             else File(paths.bin, "SwiftShader.ini").writeText("[Processor]\nThreadCount=${Runtime.getRuntime().availableProcessors().coerceIn(1, 8)}\n")
         }
         killLeftovers()
-        bindBridgeHost()          // 正常启动也要绑定：zygote 由此获得前台身份
         HostNative.limitStackSafe()
 
         // 1. дерево
@@ -657,23 +656,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     private fun startBinder() {
         val sock = paths.binderSock.absolutePath
         when (engine) {
-            Engine.KK -> spawnBridge("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, "-s", sock), emptyMap())
+            Engine.KK -> spawn("binderd", listOf(paths.nativeBin(engine.binderd).absolutePath, "-s", sock), emptyMap())
             Engine.N64 -> {
                 val env = if (File(paths.bin, "binder.verbose").exists()) mapOf("AEMU_BINDER_VERBOSE" to "1") else emptyMap()
                 val bin = paths.nativeBin(kernel.binderd).absolutePath
-                spawnBridge("binderd", listOf(bin, sock), env)
+                spawn("binderd", listOf(bin, sock), env)
                 if (kernel.treble) {
-                    spawnBridge("hwbinderd", listOf(bin, paths.hwbinderSock.absolutePath), env)
-                    spawnBridge("vndbinderd", listOf(bin, paths.vndbinderSock.absolutePath), env)
+                    spawn("hwbinderd", listOf(bin, paths.hwbinderSock.absolutePath), env)
+                    spawn("vndbinderd", listOf(bin, paths.vndbinderSock.absolutePath), env)
                     log("· Treble hwbinder and vndbinder daemons started")
                 }
             }
             Engine.GB -> if (File(paths.bin, "binderd.kk").exists()) {
                 // эксперимент: более новый binderd движка KK
-                spawnBridge("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
+                spawn("binderd", listOf(paths.nativeBin(Engine.KK.binderd).absolutePath, "-s", sock), emptyMap())
             } else {
                 Slot.start(ctx, BinderSlot::class.java, listOf("binderd", "-s", sock), emptyMap(), paths.log("binderd"))
-                keepForeground(BinderSlot::class.java)
                 log("· binderd started (:binder service)")
             }
         }
@@ -763,10 +761,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val dirs = dir.split(':').filter { File(paths.root, it).isDirectory }
             if (dirs.isNotEmpty()) extra["AEMU64_LIBPATH"] = dirs.joinToString(":") { "/$it" }
         }
-        // 核心服务（含 zygote/surfaceflinger/servicemanager）交给 :bridge 的前台服务承载：
-        // 它们的父进程因此是前台进程，ROM 的后台清理才可能整棵放过。宿主不可达自动退回本地。
-        if (svc.name in CORE_VIA_BRIDGE) spawnBridge(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
-        else spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
+        spawn(svc.name, guestRunner.cmdline(argv, props), guestRunner.env(extra))
     }
 
     /** a 64-bit ELF or a script */
@@ -1198,7 +1193,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             Thread({
                                 runCatching {
                                     killGuestPrograms(); Thread.sleep(500); cleanStaleSockets()
-                                    spawnSpecs["zygote"]?.let { sp -> spawnBridge("zygote", sp.first, sp.second) }
+                                    spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
                                 }
                             }, "zygote-boot-rebuild").apply { isDaemon = true; start() }
                             continue@wd
@@ -1231,7 +1226,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 log("✖ zygote died (code $code) — rebuilding it immediately, no full restart")
                                 Thread({
                                     runCatching {
-                                        spawnSpecs["zygote"]?.let { sp -> spawnBridge("zygote", sp.first, sp.second) }
+                                        spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
                                         Thread.sleep(3000)
                                         log("✔ zygote rebuilt — framework is back")
                                     }.onFailure { log("✖ zygote rebuild failed: ${it.message}") }
@@ -1356,16 +1351,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** 上一轮扫到的 guest 进程 pid（procs 表之外的兜底：zygote fork 的应用、HIDL HAL、system_server） */
     private val seenGuestPids = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Int, Boolean>())
 
-    /** 桥进程承载进程（:bridge，独立 FGS）。桥进程由它 spawn，才拥有前台身份。 */
-    @Volatile private var bridgeHost: android.os.Messenger? = null
-    private val bridgeConn = object : android.content.ServiceConnection {
-        override fun onServiceConnected(name: android.content.ComponentName?, service: IBinder?) {
-            bridgeHost = android.os.Messenger(service)
-            log("bridge host: connected (bridges now run under a foreground service)")
-        }
-        override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
-    }
-
     /**
      * 固件完整性检查：logcat 里 "Zygote died while execing system server" + 成批 service died
      * 之后直接 Shutting down VM —— 这是 guest 自己缺文件/坏文件的连锁崩溃，不是外部清理。
@@ -1458,68 +1443,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
     }
 
-    /** 绑定桥承载进程：同步等待 + 重试。异步绑定会让 zygote 在连上之前就走本地 spawn（无前台身份） */
-    private fun bindBridgeHost() {
-        val it = android.content.Intent(ctx, BridgeHostService::class.java)
-        runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(it) else ctx.startService(it)
-        }
-        val latch = java.util.concurrent.CountDownLatch(1)
-        val probe = object : android.content.ServiceConnection {
-            override fun onServiceConnected(name: android.content.ComponentName?, service: IBinder?) {
-                bridgeHost = android.os.Messenger(service); latch.countDown()
-            }
-            override fun onServiceDisconnected(name: android.content.ComponentName?) { bridgeHost = null }
-        }
-        repeat(5) { attempt ->
-            val bound = runCatching { ctx.bindService(it, probe, android.content.Context.BIND_AUTO_CREATE or 0x00000040) }.isSuccess
-            log("bridge host: bind attempt " + (attempt + 1) + " bound=" + bound + " host=" + (if (bridgeHost == null) "null" else "set"))
-            if (latch.await(2000, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                log("bridge host: connected on attempt " + (attempt + 1) + " - zygote runs under a foreground service")
-                return
-            }
-        }
-        log("bridge host: UNREACHABLE after 5 attempts - zygote falls back to local spawn (no FGS)")
-    }
-
-    /** 同步调用桥宿主，返回 reply 的 arg1（超时/失败 -1） */
-    private fun bridgeCall(what: Int, b: android.os.Bundle? = null): Int {
-        val m = bridgeHost ?: return -1
-        val latch = java.util.concurrent.CountDownLatch(1)
-        val out = intArrayOf(-1)
-        val reply = android.os.Messenger(android.os.Handler(android.os.Looper.getMainLooper()) { msg ->
-            out[0] = msg.arg1; latch.countDown(); true
-        })
-        val msg = android.os.Message.obtain(null, what).apply {
-            if (b != null) data = b
-            replyTo = reply
-        }
-        val sent: Boolean = runCatching { m.send(msg) }.isSuccess
-        if (!sent) { log("bridge call what=$what: send failed (host process dead?)"); return -1 }
-        val got = runCatching { latch.await(6, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault(false)
-        if (!got) { log("bridge call what=$what: no reply in 6 s (host handler stuck or crashed?)"); return -1 }
-        return out[0]
-    }
-
-    /** 桥进程走 :bridge 承载（有 FGS 身份）；未绑定则本地兜底 */
-    private fun spawnBridge(name: String, cmd: List<String>, env: Map<String, String>) {
-        val b = android.os.Bundle().apply {
-            putString("name", name)
-            putStringArray("argv", cmd.toTypedArray())
-            putStringArray("env", env.map { "${it.key}=${it.value}" }.toTypedArray())
-            putString("cwd", paths.bin.absolutePath)
-            putString("log", paths.log(name).absolutePath)
-        }
-        val pid = bridgeCall(1, b)
-        if (pid > 0) { log("· $name started (bridge host pid=$pid)"); return }
-        log("· $name: bridge host FAILED (host=" + (if (bridgeHost == null) "null" else "set") + ") - local spawn")
-        spawn(name, cmd, env)
-    }
-
-    /** watchdog L2：桥进程存活查询（它们在 :bridge 里，不在 procs 表） */
-    private fun bridgeAlive(name: String): Boolean =
-        bridgeCall(3, android.os.Bundle().apply { putString("name", name) }) == 1
-
     /** 临时状态快照：最近一次正常时的前台包名（恢复后自动拉回来） */
     @Volatile private var lastForegroundPkg: String? = null
     /** 快速恢复窗口截止时间（0 = 不在恢复流程中） */
@@ -1528,20 +1451,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var lastSoftRebootAt = 0L
     /** zygote 单独重建的防抖 */
     @Volatile private var lastZygoteRespawnAt = 0L
-    /** 走 :bridge 前台服务承载的核心进程（桥 + 关键 guest 服务） */
-    // 只把「我们自己的宿主桥」和「zygote」交给 :bridge 前台服务承载：
-    //  - 桥进程本来就是我们的二进制，与 guest init 无冲突
-    //  - zygote 是系统的根，父进程有前台身份才可能整棵被 ROM 放过
-    // 其余服务一律走原本逻辑（:vm 本地 spawn，由 guest init 自己管理重启）——
-    // 全交给 bridge 会和 guest init 双重管理，表现为反复 down → rebuild。
-    // 桥已拆：IPC 调用总是落回本地 spawn，:bridge 没有带来保护反而添乱。
-    private val CORE_VIA_BRIDGE: Set<String> = emptySet()
-
     /** boot 期 zygote 重建次数 */
     @Volatile private var zygoteBootTries = 0
-    /** 桥进程重建防抖 */
-    @Volatile private var lastBridgeRespawnAt = 0L
-
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
     private val respawnTried = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
 
@@ -1804,7 +1715,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         when (engine) {
             Engine.N64 -> {
                 if (kernel.gpuBridge32 != null && n64Has32) {
-                    spawnBridge("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
+                    spawn("glserverd", listOf(paths.nativeBin(Engine.KK.glserverd).absolutePath,
                         "-s", paths.glSock.absolutePath, "-fb", File(paths.bin, "gl32.fb").absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
                 }
             }
@@ -1812,10 +1723,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 Slot.start(ctx, GlSlot::class.java,
                     listOf("glserverd", "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath, "-w", "$w", "-h", "$h"),
                     emptyMap(), paths.log("glserverd"))
-                keepForeground(GlSlot::class.java)
             }
             Engine.KK -> {
-                spawnBridge("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
+                spawn("glserverd", listOf(paths.nativeBin(engine.glserverd).absolutePath,
                     "-s", paths.glSock.absolutePath, "-fb", paths.fb.absolutePath,
                     "-notify", paths.frameSock.absolutePath, "-w", "$w", "-h", "$h"), glServerEnv())
             }
@@ -1958,8 +1868,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
         Keeper.release(ctx)
-        runCatching { binderKeep?.let { ctx.unbindService(it) }; glKeep?.let { ctx.unbindService(it) } }
-        binderKeep = null; glKeep = null
         setState(State.STOPPED)
     }
 
@@ -2083,29 +1991,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             runCatching { protectProcessTree() }
             Thread.sleep(5_000)
         }
-    }
-
-    /**
-     * Non-root-safe keep-alive for the guest's helper processes that run in their own Android service
-     * processes (`:binder`/`:gl`, the GB engine). They have no foreground service of their own, so when
-     * AndroPaw is backgrounded the host low-memory killer reaps them first. Binding from this `:vm` process
-     * — which runs the Keeper foreground service — with BIND_FOREGROUND_SERVICE lifts their importance to
-     * foreground, exactly like Keeper does for `:vm`. Root hosts additionally get the oom_score_adj pin above.
-     */
-    private var binderKeep: ServiceConnection? = null
-    private var glKeep: ServiceConnection? = null
-    private fun keepForeground(cls: Class<out Any>) {
-        val conn = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {}
-            override fun onServiceDisconnected(name: ComponentName?) {}
-        }
-        val intent = Intent(ctx, cls)
-        // BIND_FOREGROUND_SERVICE = 0x40, BIND_AUTO_CREATE = 0x1. Use literals: the SDK const combined via
-        // `or` trips the K2 constant evaluator (INITIALIZER_TYPE_MISMATCH / BigInteger) on some compile targets.
-        val flags = 0x40 or 0x1
-        val ok: Boolean = runCatching { ctx.bindService(intent, conn, flags) }.getOrDefault(false)
-        if (ok) { if (cls == BinderSlot::class.java) binderKeep = conn else glKeep = conn }
-        else log("keep: ${cls.simpleName} not bound (already running or not found)")
     }
 
     fun bootSeconds(): Long = if (bootAt == 0L) 0 else ((if (bootDoneAt > 0) bootDoneAt else System.currentTimeMillis()) - bootAt) / 1000
