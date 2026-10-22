@@ -308,6 +308,20 @@ fun AboutScreen(onBack: () -> Unit) {
                     }
                 }
 
+                // 贡献者卡
+                item { Spacer(modifier = Modifier.height(12.dp)) }
+                item {
+                    val contributorUrl = stringResource(R.string.about_contributor_url)
+                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                        ArrowPreference(
+                            title = stringResource(R.string.about_contributor_name),
+                            summary = stringResource(R.string.about_contributor_handle),
+                            onClick = { openUrl(context, contributorUrl) },
+                            startAction = { AvatarBox("https://github.com/YHLFurry.png") },
+                        )
+                    }
+                }
+
                 // 检查更新卡
                 item { Spacer(modifier = Modifier.height(12.dp)) }
                 item {

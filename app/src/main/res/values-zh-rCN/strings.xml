@@ -201,6 +201,9 @@
     <string name="about_developer_name">极犽</string>
     <string name="about_developer_handle">\@TiG-Kira</string>
     <string name="about_developer_url">https://github.com/TiG-Kira</string>
+    <string name="about_contributor_name">椰灰狼</string>
+    <string name="about_contributor_handle">\@YHLFurry</string>
+    <string name="about_contributor_url">https://github.com/YHLFurry</string>
     <string name="about_version_info">版本信息</string>
     <string name="about_app_version_label">AndroPaw 版本</string>
     <string name="about_upstream_info">基于 uxazu 的 AEmulator 构建，其源自最初的 SENSES 模拟器。</string>

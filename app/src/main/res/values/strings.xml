@@ -200,6 +200,9 @@
     <string name="about_developer_name">极犽</string>
     <string name="about_developer_handle">\@TiG-Kira</string>
     <string name="about_developer_url">https://github.com/TiG-Kira</string>
+    <string name="about_contributor_name">椰灰狼</string>
+    <string name="about_contributor_handle">\@YHLFurry</string>
+    <string name="about_contributor_url">https://github.com/YHLFurry</string>
     <string name="about_version_info">Version info</string>
     <string name="about_app_version_label">AndroPaw version</string>
     <string name="about_upstream_info">Based on AEmulator by uxazu, which grew from the original SENSES emulator.</string>
