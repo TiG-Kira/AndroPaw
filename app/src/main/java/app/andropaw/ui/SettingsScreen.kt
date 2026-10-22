@@ -6,13 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,10 +21,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -47,6 +42,7 @@ import top.yukonga.miuix.kmp.basic.RadioButton
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
@@ -83,14 +79,23 @@ fun SettingsContent(
 
         item {
             Section(stringResource(R.string.agent_settings_group)) {
-                Row_(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_llm_row),
-                    stringResource(R.string.agent_settings_sub)) { agentSettings = true }
+                ArrowPreference(
+                    title = stringResource(R.string.agent_llm_row),
+                    summary = stringResource(R.string.agent_settings_sub),
+                    startAction = { Icon(Icons.Rounded.AutoAwesome, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { agentSettings = true },
+                )
             }
         }
 
         item {
             Section(stringResource(R.string.as_appearance)) {
-                Row_(Icons.Rounded.Translate, stringResource(R.string.as_language), langName) { langDialog = true }
+                ArrowPreference(
+                    title = stringResource(R.string.as_language),
+                    summary = langName,
+                    startAction = { Icon(Icons.Rounded.Translate, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { langDialog = true },
+                )
                 Text(stringResource(R.string.as_theme), fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp))
                 val options = listOf(R.string.as_theme_system, R.string.as_theme_light, R.string.as_theme_dark)
@@ -164,17 +169,15 @@ fun SettingsContent(
 
 @Composable
 private fun AboutCard(onClick: () -> Unit = {}) {
-    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(20.dp), onClick = onClick) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.logo), null, Modifier.size(64.dp).clip(RoundedCornerShape(20.dp)))
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text("AndroPaw", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(stringResource(R.string.as_version, BuildConfig.VERSION_NAME), fontSize = 12.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(stringResource(R.string.as_about), fontSize = 13.sp)
-            }
-        }
+    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(vertical = 8.dp)) {
+        ArrowPreference(
+            title = "AndroPaw",
+            summary = stringResource(R.string.as_version, BuildConfig.VERSION_NAME),
+            startAction = {
+                Image(painterResource(R.drawable.logo), null, Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)))
+            },
+            onClick = onClick,
+        )
     }
 }
 
@@ -191,16 +194,6 @@ private fun Section(title: String, subtitle: String? = null, content: @Composabl
             content()
         }
     }
-}
-
-@Composable
-private fun Row_(icon: ImageVector, title: String, sub: String, mono: Boolean = false, onClick: () -> Unit) {
-    BasicComponent(
-        title = title,
-        summary = sub,
-        startAction = { Icon(icon, null, tint = MiuixTheme.colorScheme.primary) },
-        onClick = onClick,
-    )
 }
 
 /** A settings row with a miuix switch, used on this page and by the per-machine settings sheet. */
