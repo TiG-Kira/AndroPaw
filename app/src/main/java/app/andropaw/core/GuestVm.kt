@@ -216,7 +216,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val p = pb.start()
         // 立刻 pin：内核 lmkd 就在这几十毫秒里挑"最肥的无名进程"，晚一步 zygote 就没了
         runCatching {
-            val pid = Process::class.java.getMethod("pid").invoke(p) as? Int ?: -1
+            val pid = pidOf(p) ?: -1
             if (pid > 0) pinGuest(pid)
         }
         synchronized(procs) { procs["recovery"] = p }
@@ -797,7 +797,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val p = pb.start()
         // 立刻 pin：内核 lmkd 就在这几十毫秒里挑"最肥的无名进程"，晚一步 zygote 就没了
         runCatching {
-            val pid = Process::class.java.getMethod("pid").invoke(p) as? Int ?: -1
+            val pid = pidOf(p) ?: -1
             if (pid > 0) pinGuest(pid)
         }
         synchronized(procs) { procs[name] = p }
@@ -1022,7 +1022,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             plannedRestart = true
             log("first boot: setup wizard ($wizard) switched off in the running system, restarting it")
             runCatching { guestShell("settings put global device_provisioned 1; settings put secure user_setup_complete 1; pm disable-user --user 0 $wizard", 60_000) }
-            synchronized(procs) { procs["zygote"] }?.let { z -> pidOf(z)?.let { runCatching { AProcess.sendSignal(it, 9) } } }
+            requestZygoteRestart("setup wizard")
             return true
         }
         val pkgs = runCatching { pkgFile.readText() }.getOrNull() ?: return false
@@ -1033,7 +1033,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         wizardSkipped = true
         plannedRestart = true
         log("first boot: restarting the system past the setup wizard ($wizard)")
-        synchronized(procs) { procs["zygote"] }?.let { z -> pidOf(z)?.let { runCatching { AProcess.sendSignal(it, 9) } } }
+        requestZygoteRestart("setup wizard")
         return true
     }
 
@@ -1183,19 +1183,34 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     // "restart the system" 分支会 SIGKILL zygote、zygote 分支又重启系统，恢复必被打断。
                     // 窗口内一切交给恢复线程与超时兜底。
                     if (fastRecoveryUntil > 0) continue
-                    val p = synchronized(procs) { procs[name] } ?: continue
+                    val p = GuestProcesses.takeExited(procs, name) ?: continue
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
+                        logZygoteExit(name, code)
+                        // A secondary ABI failure must not tear down the primary framework.
+                        if (name == "zygote_secondary") {
+                            val attempts = restarts.getOrDefault(name, 0)
+                            if (attempts < 3 && synchronized(procs) { procs["zygote"]?.isAlive == true }) {
+                                restarts[name] = attempts + 1
+                                paths.socket("zygote_secondary").delete()
+                                paths.socket("usap_pool_secondary").delete()
+                                servicePlan().firstOrNull { it.name == name }?.let { runCatching { startService(it) } }
+                            } else log("zygote_secondary: not restarting (primary down or retry limit reached)")
+                            continue
+                        }
+                        // Setup-wizard and explicit framework restarts are intentional SIGKILLs.
+                        if (plannedRestart) {
+                            plannedRestart = false
+                            TreeFixer(ctx, paths, img, ::log).noScreenSleep()
+                            runCatching { restartZygote() }.onFailure { log("zygote restart failed: ${it.message}") }
+                            continue@wd
+                        }
                         // boot 期被宿主扫掉是常态（本地 spawn 无前台身份时尤其）：先重建，3 次都失败才判失败
-                        if (bootDoneAt == 0L && zygoteBootTries < 3 && code == 137) {
+                        if (!everBooted && bootDoneAt == 0L && zygoteBootTries < 3 && code == 137) {
                             zygoteBootTries++
                             log("zygote died during boot (code " + code + ") - rebuilding (" + zygoteBootTries + "/3)")
-                            Thread({
-                                runCatching {
-                                    killGuestPrograms(); Thread.sleep(500); cleanStaleSockets()
-                                    spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
-                                }
-                            }, "zygote-boot-rebuild").apply { isDaemon = true; start() }
+                            // Keep binder, surfaceflinger, netd and the other boot dependencies alive.
+                            runCatching { restartZygote() }.onFailure { log("zygote boot rebuild failed: ${it.message}") }
                             continue@wd
                         }
                         if (state != State.FAILED && bootDoneAt == 0L && !(everBooted && zygoteRestarts < 6)) {
@@ -1204,35 +1219,15 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             failure = "$name exited (code $code)" + if (code == 137) {
                                 when {
                                     missing.isNotEmpty() || svcMissing.isNotEmpty() ->
-                                        " — firmware incomplete: ${missing.size} key file(s) + ${svcMissing.size} planned service(s) missing (see the host log); the guest shut its own VM down"
+                                        " — SIGKILL; firmware checks also found ${missing.size} missing key file(s) and ${svcMissing.size} missing service(s); killer not confirmed"
                                     else ->
-                                        " — system_server died while zygote was execing it and the guest shut the VM down (see the guest log)"
+                                        " — SIGKILL: host memory/battery policy, guest shutdown or system_server failure; inspect zygote-exit diagnostics"
                                 }
                             } else ""
                             if (code == 137 && guestLogHas("No original dex files found"))
                                 failure = "system_server cannot start: the precompiled code of the framework (system/framework/oat) is missing from this container — import the firmware again"
                             log("✖ $failure"); setState(State.FAILED)
-                        } else if (plannedRestart) {
-                            plannedRestart = false
-                            killZygoteChildren()
-                            TreeFixer(ctx, paths, img, ::log).noScreenSleep()
-                            restartZygote()
                         } else if (bootDoneAt > 0 || everBooted) {
-                            // zygote 死 = framework 全死。与其走"重启整个系统"（黑屏十秒起），
-                            // 不如立刻重建 zygote：它 fork system_server 后 framework 自己回来，
-                            // 界面不退出、页面不重建。限频 15 秒，防止疯狂抖动。
-                            if (System.currentTimeMillis() - lastZygoteRespawnAt > 15_000) {
-                                lastZygoteRespawnAt = System.currentTimeMillis()
-                                log("✖ zygote died (code $code) — rebuilding it immediately, no full restart")
-                                Thread({
-                                    runCatching {
-                                        spawnSpecs["zygote"]?.let { sp -> spawn("zygote", sp.first, sp.second) }
-                                        Thread.sleep(3000)
-                                        log("✔ zygote rebuilt — framework is back")
-                                    }.onFailure { log("✖ zygote rebuild failed: ${it.message}") }
-                                }, "zygote-rebuild").apply { isDaemon = true; start() }
-                                continue@wd
-                            }
                             zygoteRestarts++
                             val now = System.currentTimeMillis()
                             zygoteCrashes.addLast(now)
@@ -1254,7 +1249,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 restartZygote()
                             }
                         }
-                        synchronized(procs) { procs.remove(name) }
                         continue
                     }
                     val n = restarts.getOrDefault(name, 0)
@@ -1290,7 +1284,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                         log("✖ surfaceflinger crashed (code $code), restarting it and the system (${n + 1}/12)")
                         synchronized(procs) { procs.remove(name) }
                         runCatching { startService(svc) }
-                        synchronized(procs) { procs["zygote"] }?.let { z -> pidOf(z)?.let { runCatching { AProcess.sendSignal(it, 9) } } }
+                        requestZygoteRestart("surfaceflinger restart")
                         continue
                     }
                     // родной audio_policy производителя может падать с нашим HAL — подменяем на AOSP
@@ -1450,7 +1444,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** 软重启防抖：刚重启过 45 秒内不重复（允许反复恢复，不再一次性焊死） */
     @Volatile private var lastSoftRebootAt = 0L
     /** zygote 单独重建的防抖 */
-    @Volatile private var lastZygoteRespawnAt = 0L
     /** boot 期 zygote 重建次数 */
     @Volatile private var zygoteBootTries = 0
     /** 按依赖顺序重建死掉的核心进程（binder 先、zygote 最后），不等 init 的 backoff */
@@ -1675,7 +1668,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             1 -> {
                 freeze.stage = 2; freeze.firedAt = now
                 log("⚠ still frozen after the helpers were recycled; restarting the guest system")
-                synchronized(procs) { procs["zygote"] }?.let { z -> pidOf(z)?.let { runCatching { AProcess.sendSignal(it, 9) } } }
+                requestZygoteRestart("freeze watchdog")
             }
             else -> {
                 freeze.stage = 3; freeze.firedAt = now
@@ -1787,27 +1780,64 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     @Volatile private var plannedRestart = false
     private var wizardSkipped = false
 
+    @Volatile private var zygoteKillReason: String? = null
+
+    private fun requestZygoteRestart(reason: String) {
+        val process = synchronized(procs) { procs["zygote"]?.takeIf { it.isAlive } } ?: return
+        val pid = pidOf(process) ?: return
+        plannedRestart = true
+        zygoteKillReason = reason
+        log("zygote-kill: requested SIGKILL pid=$pid reason=$reason")
+        runCatching { AProcess.sendSignal(pid, 9) }.onFailure {
+            plannedRestart = false
+            zygoteKillReason = null
+            log("zygote-kill: signal failed: ${it.message}")
+        }
+    }
+
     private fun restartZygote() {
-        val z = img.services.firstOrNull { it.name == "zygote" } ?: return
+        val plan = servicePlan()
+        val z = plan.firstOrNull { it.name == "zygote" } ?: return
         bootDoneAt = 0
         setState(State.BOOTING)
         paths.socket("zygote").delete()
         paths.socket("zygote_secondary").delete()
+        paths.socket("usap_pool_primary").delete()
+        paths.socket("usap_pool_secondary").delete()
+        lmk?.armed = false
         // на настоящем ядре дети зиготы гибнут вместе с system_server; здесь они остаются жить и
         // держат ссылки на мёртвые службы (телефония отказывает новому system_server в правах)
         val n = killZygoteChildren()
         if (n > 0) log("killed apps of previous zygote: $n")
         // healthd keeps the battery listener of the dead system_server and stops answering the new one:
         // BatteryService.onStart then blocks in registerListener forever
-        img.services.firstOrNull { it.name == "healthd" }?.let { h ->
+        plan.firstOrNull { it.name == "healthd" }?.let { h ->
             synchronized(procs) { procs.remove("healthd") }?.let { runCatching { it.destroyForcibly() } }
             runCatching { startService(h) }
         }
         runCatching { startService(z) }
-        img.services.firstOrNull { it.name == "zygote_secondary" }?.let { z2 ->
+        plan.firstOrNull { it.name == "zygote_secondary" }?.let { z2 ->
             synchronized(procs) { procs.remove("zygote_secondary") }?.let { runCatching { it.destroyForcibly() } }
             runCatching { startService(z2) }
         }
+    }
+
+    private fun logZygoteExit(name: String, code: Int) {
+        val memory = runCatching {
+            File("/proc/meminfo").useLines { lines ->
+                lines.filter { it.startsWith("MemAvailable:") || it.startsWith("SwapFree:") }.joinToString("; ")
+            }
+        }.getOrDefault("unavailable")
+        val hostAdj = runCatching { File("/proc/${AProcess.myPid()}/oom_score_adj").readText().trim() }.getOrDefault("?")
+        val tail = runCatching { java.io.RandomAccessFile(paths.log(name), "r").use { file ->
+                val size = minOf(file.length(), 3000L).toInt()
+                file.seek(file.length() - size)
+                ByteArray(size).also { file.readFully(it) }.toString(Charsets.UTF_8)
+            } }.getOrDefault("")
+        log("zygote-exit: service=$name code=$code bootCompleted=${bootDoneAt > 0} planned=$plannedRestart " +
+            "requestedKill=${zygoteKillReason ?: "none"} hostAdj=$hostAdj guestLmkKills=${lmk?.kills ?: 0}; $memory")
+        if (tail.isNotBlank()) log("zygote-exit: last output: $tail")
+        if (name == "zygote") zygoteKillReason = null
     }
 
     private fun guestLogHas(text: String): Boolean = runCatching {
@@ -1829,7 +1859,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             // app_process с aemu-stubs.jar — наша заглушка bluetooth_manager, не приложение зиготы
             if (cmd.contains(marker) && cmd.contains("/system/bin/app_process") && !cmd.contains("aemu-stubs.jar")) {
                 runCatching { AProcess.sendSignal(pid, 9) }; n++
-            } else if (orphanOfThisImage(d)) {
+            } else if (orphanOfThisImage(d) && (cmd.substringBefore(0.toChar()) == "system_server" ||
+                    GuestProcesses.appCandidate(cmd))) {
                 // 7.0+: a zygote child rewrites its whole command line ("system_server"), so the path is gone from it;
                 // what is left of a dead zygote is known by the root in its environment and by having no parent
                 runCatching { AProcess.sendSignal(pid, 9) }; n++
@@ -1855,7 +1886,6 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         zygoteRebootTried = false
         sweepRebootTried = false
         lastSoftRebootAt = 0L
-        lastZygoteRespawnAt = 0L
         zygoteBootTries = 0
         lastMassDeathNotice = 0L
         fastRecoveryUntil = 0L
@@ -1908,12 +1938,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
      * with code 137 → (1/12). Root is required to write a negative adj; if it fails we just log it.
      */
     @Volatile private var lastPinned = -1
-    /** pin 被宿主拒绝后的下一次探测时间（非 root 必被拒，别每轮都白扫 /proc） */
-    @Volatile private var nextPinProbeAt = 0L
-
-    private fun protectProcessTree(force: Boolean = false) {
-        val now0 = System.currentTimeMillis()
-        if (oomUnsupported && !force && now0 < nextPinProbeAt) return
+    private fun protectProcessTree() {
+        if (oomUnsupported) return
         val mine = AProcess.myPid()
         var pinned = 0
         writeOomScore(mine, PROTECTED_OOM_ADJ)
@@ -1946,25 +1972,21 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             // 防止任何脱离 :vm 父链的进程（例如被 guest init 重新挂接的）漏出保护
             val isOurs = cmd.contains("libaemu64") || cmd.contains("/images/") &&
                 (cmd.contains("libqemu") || cmd.contains("libbinderd") || cmd.contains("libdhdrun") || cmd.contains("libglserverd") || cmd.contains("aemu"))
-            if (isHelper || isOurs || descendants.contains(pid)) { pinGuest(pid); pinned++ }
+            if ((isHelper || isOurs || descendants.contains(pid)) && pinGuest(pid)) pinned++
         }
         // 让 pin 的结果可见：成功 N 个 / 失败说明被 SELinux 或宿主策略拦了（那时只能靠系统白名单）
         if (pinned != lastPinned) {
             lastPinned = pinned
             log("oom: pinned $pinned guest process(es) at $PROTECTED_OOM_ADJ" + if (oomUnsupported) " (some writes refused — host policy)" else "")
         }
-        if (oomUnsupported && pinned == 0) nextPinProbeAt = now0 + 60_000
     }
 
-    /** 写别的进程的 oom_score_adj 只要求能 signal 它（同 uid 即可）——guest 进程与 :vm 同 uid，
-     * 所以非 root 宿主上这一 pin 同样生效；真失败（SELinux 拦截等）记一次日志后静默继续。 */
+    /** Negative oom_score_adj generally requires CAP_SYS_RESOURCE; the app must report rejection honestly. */
     @Volatile private var oomUnsupported = false
 
     /** pin -1000（never kill）。被宿主拒绝时立刻放弃——负值同样需要 CAP_SYS_RESOURCE，重试无意义 */
-    private fun pinGuest(pid: Int) {
-        if (oomUnsupported) return
-        writeOomScore(pid, PROTECTED_OOM_ADJ)
-    }
+    private fun pinGuest(pid: Int): Boolean =
+        !oomUnsupported && writeOomScore(pid, PROTECTED_OOM_ADJ)
 
     private fun writeOomScore(pid: Int, adj: Int): Boolean {
         val ok = runCatching {
@@ -1974,17 +1996,20 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 android.system.Os.write(fd, b, 0, b.size)
             } finally { android.system.Os.close(fd) }
             true
-        }.getOrElse { false }
-        if (!ok && !oomUnsupported) {
-            oomUnsupported = true
-            log("oom: cannot pin oom_score_adj (host policy / SELinux refused); falling back to the highest value the kernel allows")
+        }.getOrElse { error ->
+            val errno = (error as? android.system.ErrnoException)?.errno
+            if (!oomUnsupported && (errno == android.system.OsConstants.EACCES || errno == android.system.OsConstants.EPERM)) {
+                oomUnsupported = true
+                log("oom: negative oom_score_adj denied by host policy; guest is NOT pinned (foreground service does not protect every child)")
+            }
+            false
         }
         return ok
     }
 
     /** Re-pin the guest process tree every few seconds so freshly spawned helpers stay protected. */
     /** 立刻刷一遍 oom pin（切后台前调用：MIUI 的清理通常就在失焦后的几秒内发生） */
-    fun reprotectNow() { runCatching { protectProcessTree(force = true) } }
+    fun reprotectNow() { runCatching { protectProcessTree() } }
 
     private fun protectLoop() {
         while (!stopping && state != State.STOPPED) {
@@ -2026,15 +2051,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     fun installApk(apkOnSdcard: String): String = guestShell("pm install -r $apkOnSdcard", 600_000)
 
-    private fun pidOf(p: Process): Int? {
-        var c: Class<*>? = p.javaClass
-        while (c != null) {
-            val f = c.declaredFields.firstOrNull { it.name == "pid" }
-            if (f != null) { f.isAccessible = true; return f.getInt(p) }
-            c = c.superclass
-        }
-        return null
-    }
+    private fun pidOf(p: Process): Int? = GuestProcesses.pid(p)
 
     /** What init of 10+ does after reading the property files: ro.product.<what> from the first partition that has
      *  ro.product.<partition>.<what>, and the fingerprint from its parts. Only where the firmware does not say. */

@@ -141,7 +141,7 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
     )
 
     private fun cmdlineOf(pid: Int): String? =
-        runCatching { String(File("/proc/$pid/cmdline").readBytes(), Charsets.ISO_8859_1).trim().trimEnd(0.toChar()) }.getOrNull()
+        runCatching { String(File("/proc/$pid/cmdline").readBytes(), Charsets.ISO_8859_1).substringBefore(0.toChar()).trim() }.getOrNull()
 
     /**
      * 可牺牲的只有"普通应用"：cmdline 是包名（含点）或 pkg:process 形式，且不在核心名单。
@@ -152,7 +152,7 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         if (cmd.isEmpty()) return false
         val base = cmd.substringBefore(':')
         if (cmd in NEVER_KILL || base in NEVER_KILL) return false
-        if (!cmd.contains('.')) return false
+        if (!GuestProcesses.appCandidate(cmd)) return false
         if (cmd.startsWith("app.andropaw")) return false
         // 系统关键应用：SystemUI/OOBE/设置被杀会让系统"能进桌面但没状态栏"或开箱流程反复重启
         for (keep in listOf("com.android.systemui", "com.google.android.setupwizard",
@@ -174,6 +174,7 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         val maxCached = if (ramMb > 0) (ramMb / 128).coerceIn(2, MAX_CACHED) else if (lowRam) 4 else MAX_CACHED
         while (running) {
             Thread.sleep(2000)
+            if (!running || !armed) continue
             adj.keys.removeAll { !File("/proc/$it").exists() }
             val cached = adj.filter { it.value >= CACHED }.keys.toMutableSet()
             if (cached.isEmpty()) continue
@@ -199,8 +200,9 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
             }
             if (victim == 0 || !isSacrificial(victim)) continue
             val a = adj[victim]
-            runCatching { Os.kill(victim, OsConstants.SIGKILL) }
+            val killed = runCatching { Os.kill(victim, OsConstants.SIGKILL) }.isSuccess
             adj.remove(victim)
+            if (!killed) { log("memory: SIGKILL failed for pid $victim"); continue }
             kills++
             log("memory: killed background process $victim (adj $a, ${sizes[victim]} MB; cached ${cached.size}, host free $avail MB)")
             Thread.sleep(3000)
