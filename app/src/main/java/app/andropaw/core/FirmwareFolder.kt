@@ -1,5 +1,6 @@
 package app.andropaw.core
 
+import android.os.Build
 import android.os.Environment
 import java.io.File
 
@@ -14,7 +15,7 @@ object FirmwareFolder {
 
     /** Firmware files, newest first; empty when there is no all-files access. */
     fun list(): List<File> = runCatching {
-        if (!Environment.isExternalStorageManager()) return emptyList()
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) return emptyList()
         dir.mkdirs()
         dir.listFiles().orEmpty().filter { it.isFile && it.length() > 1_000_000 && EXT.matches(it.name) }
             .sortedByDescending { it.lastModified() }

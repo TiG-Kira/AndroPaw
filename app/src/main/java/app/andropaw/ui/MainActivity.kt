@@ -276,7 +276,11 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         }
     }
 
+    var lastDownload by remember { mutableStateOf<ReleaseInfo?>(null) }
+
     fun startDownload(rel: ReleaseInfo) {
+        if (downloadJob?.isActive == true) return
+        lastDownload = rel
         updateState = UpdateState.Downloading(rel, 0f, 0L, rel.sizeBytes)
         downloadJob = scope.launch {
             try {
@@ -506,6 +510,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             state = updateState,
             onDismiss = { updateState = UpdateState.Idle },
             onStartDownload = ::startDownload,
+            onRetry = lastDownload?.let { rel -> { startDownload(rel) } },
             onCancelDownload = {
                 downloadJob?.cancel()
                 updateState = UpdateState.Idle

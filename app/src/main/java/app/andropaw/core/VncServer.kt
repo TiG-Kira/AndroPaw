@@ -64,6 +64,8 @@ class VncServer(
     private fun accept(s: ServerSocket) {
         while (server === s) {
             val c = runCatching { s.accept() }.getOrNull() ?: break
+            if (clients.size >= 4) { c.close(); continue }
+            c.soTimeout = 30_000
             clients.add(c)
             Thread({
                 runCatching { serve(c) }.onFailure { e -> if (server != null) log("vnc: ${c.inetAddress.hostAddress}: ${e.message ?: e}") }
@@ -106,6 +108,7 @@ class VncServer(
         } else if (minor >= 8) out.writeInt(0)
         out.flush()
         inp.readUnsignedByte()                                  // ClientInit: shared or not, all the same here
+        c.soTimeout = 0 // Idle authenticated viewers may wait indefinitely.
         val fmt = Format()
         out.writeShort(width); out.writeShort(height)
         out.writeByte(32); out.writeByte(24); out.writeByte(0); out.writeByte(1)
@@ -169,6 +172,8 @@ class VncServer(
                         val rm = inp.readUnsignedShort(); val gm = inp.readUnsignedShort(); val bm = inp.readUnsignedShort()
                         val rs = inp.readUnsignedByte(); val gs = inp.readUnsignedByte(); val bs = inp.readUnsignedByte()
                         inp.skipBytes(3)
+                        require(bpp in listOf(8, 16, 32) && listOf(rs, gs, bs).all { it < bpp } &&
+                            listOf(rm, gm, bm).all { it > 0 && it <= 65535 }) { "Invalid VNC pixel format" }
                         synchronized(out) { fmt.bpp = bpp; fmt.bigEndian = be; fmt.rMax = rm; fmt.gMax = gm; fmt.bMax = bm; fmt.rShift = rs; fmt.gShift = gs; fmt.bShift = bs }
                         synchronized(wanted) { want = 2; wanted.notifyAll() }
                     }

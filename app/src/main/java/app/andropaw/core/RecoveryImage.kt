@@ -31,15 +31,17 @@ object RecoveryImage {
         // never deleteRecursively: system/, data/, sdcard/ in it are links to the firmware's partitions and card
         ImageStore.wipe(out)
         out.mkdirs()
-        val base = out.canonicalPath
         for (e in rd) {
             val n = e.name.trimStart('/')
             if (n.isEmpty() || n == ".") continue
-            val f = File(out, n)
-            if (!f.canonicalPath.startsWith(base)) continue
+            val f = SafePaths.resolve(out, n)
             when (e.mode and 0xF000) {
                 0x4000 -> f.mkdirs()
-                0xA000 -> { f.parentFile?.mkdirs(); runCatching { Os.symlink(String(e.data), f.path) } }
+                0xA000 -> {
+                    val target = SafePaths.linkTarget(out, f, String(e.data))
+                    f.parentFile?.mkdirs()
+                    Os.symlink(target, f.path)
+                }
                 0x8000 -> {
                     f.parentFile?.mkdirs(); f.writeBytes(e.data)
                     if (e.mode and 0x49 != 0) f.setExecutable(true, false)

@@ -27,7 +27,6 @@
     <!-- 电源优化豁免：MIUI 等系统的后台清理会按 uid 扫掉模拟器子进程（成批 code 137） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:usesCleartextTraffic="true"
