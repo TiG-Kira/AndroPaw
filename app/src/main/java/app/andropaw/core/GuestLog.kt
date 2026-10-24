@@ -50,8 +50,24 @@ object GuestLog {
     fun contains(root: File, vararg needles: String): Boolean {
         val f = File(root, "dev/log/main")
         if (!f.isFile) return false
-        val t = runCatching { String(f.readBytes(), Charsets.ISO_8859_1) }.getOrDefault("")
-        return needles.any { t.contains(it) }
+        if (needles.isEmpty()) return false
+        if (needles.any { it.isEmpty() }) return true
+        // Preserve matches across chunks without loading an ever-growing log into the heap.
+        val overlap = needles.maxOf { it.length } - 1
+        return runCatching {
+            f.reader(Charsets.ISO_8859_1).use { reader ->
+                val chunk = CharArray(64 * 1024)
+                var carry = ""
+                while (true) {
+                    val count = reader.read(chunk)
+                    if (count < 0) break
+                    val text = carry + String(chunk, 0, count)
+                    if (needles.any { text.contains(it) }) return@use true
+                    carry = text.takeLast(overlap)
+                }
+                false
+            }
+        }.getOrDefault(false)
     }
 
     fun clear(root: File) {

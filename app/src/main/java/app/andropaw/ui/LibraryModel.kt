@@ -51,10 +51,14 @@ class LibraryModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "firmware"
         _import.value = ImportState(active = true, file = name, step = "Starting")
         viewModelScope.launch(Dispatchers.IO) {
-            val log = ArrayList<String>()
+            val log = java.util.ArrayDeque<String>(50)
             val imp = Importer(ctx,
                 onProgress = { step, p -> _import.value = _import.value.copy(step = step, progress = if (p >= 0) p else _import.value.progress.takeIf { it >= 0 } ?: -1f) },
-                log = { s -> log.add(s); _import.value = _import.value.copy(log = log.takeLast(50)) })
+                log = { s ->
+                    if (log.size == 50) log.removeFirst()
+                    log.addLast(s)
+                    _import.value = _import.value.copy(log = log.toList())
+                })
             importer = imp
             try {
                 // умолчания из настроек приложения поверх того, что подобрал анализатор (экран, частоты)

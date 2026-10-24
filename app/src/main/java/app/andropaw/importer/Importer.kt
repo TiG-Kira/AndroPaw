@@ -3,6 +3,7 @@ package app.andropaw.importer
 import android.content.Context
 import android.net.Uri
 import android.system.Os
+import app.andropaw.core.SafePaths
 import app.andropaw.core.GuestImage
 import app.andropaw.core.ImageStore
 import app.andropaw.core.TreeFixer
@@ -451,7 +452,7 @@ class Importer(
                     // файлы корня (рамдиск, dhd.*) берём, только если архив — целое дерево rootfs
                     if (fullRoot != true && !n.startsWith("system") && !(n.startsWith("dhd.") || n.endsWith(".rc") || n == "default.prop" || n.startsWith("sbin"))) continue
                     when {
-                        e.isDirectory -> File(root, n).mkdirs()
+                        e.isDirectory -> SafePaths.resolve(root, n).mkdirs()
                         e.isSymbolicLink -> symlinks.add(e.linkName to "/$n")
                         e.isLink -> hardlink(n, e.linkName)
                         e.isFile -> {
@@ -464,7 +465,7 @@ class Importer(
                 name.contains("system", true) && name.endsWith(".win", true) -> {
                     val p = "system/$n"
                     when {
-                        e.isDirectory -> File(root, p).mkdirs()
+                        e.isDirectory -> SafePaths.resolve(root, p).mkdirs()
                         e.isSymbolicLink -> symlinks.add(e.linkName to "/$p")
                         e.isFile -> { writeFile(p, tar.nonClosing(), e.mode); gotSystem = true }
                     }
@@ -480,8 +481,8 @@ class Importer(
         if (name.endsWith(".lz4", true)) org.apache.commons.compress.compressors.lz4.FramedLZ4CompressorInputStream(s.nonClosing()) else s.nonClosing()
 
     private fun hardlink(n: String, target: String) {
-        val src = File(root, target.removePrefix("./").trimStart('/'))
-        val dst = File(root, n)
+        val src = SafePaths.resolve(root, target.removePrefix("./").trimStart('/'))
+        val dst = SafePaths.resolve(root, n)
         if (src.isFile) { dst.parentFile?.mkdirs(); src.copyTo(dst, overwrite = true) }
     }
 
@@ -518,8 +519,7 @@ class Importer(
         tree.walk { path, isDir, link, mode, size, data ->
             if (cancelled) throw IOException("cancelled")
             val rel = "$mount/$path"
-            val f = File(root, rel)
-            if (!f.canonicalPath.startsWith(root.canonicalPath)) return@walk
+            val f = SafePaths.resolve(root, rel)
             when {
                 isDir -> f.mkdirs()
                 link != null -> symlinks.add(link to "/$rel")
@@ -553,8 +553,9 @@ class Importer(
                 val sin = File(tmp, "${System.nanoTime()}-$base")
                 if (!raw.renameTo(sin)) throw IOException("cannot move $raw")
                 try { sin.inputStream().use { SinImage.unpack(it, raw) { if (cancelled) throw IOException("cancelled") } } } finally { sin.delete() }
-            } else
-            SinImage.unpack(s, raw) { if (cancelled) throw IOException("cancelled") }
+            } else {
+                SinImage.unpack(s, raw) { if (cancelled) throw IOException("cancelled") }
+            }
             if (base.startsWith("kernel", true) || base.startsWith("boot", true)) { takeBoot(raw.readBytes()); return }
             if (base.startsWith("recovery", true) || base.startsWith("fotakernel", true)) return
             FileChannel.open(raw.toPath(), StandardOpenOption.READ).use { c -> importImage(ChannelSource(c), base.substringBefore('.').lowercase()) }
@@ -606,7 +607,7 @@ class Importer(
         fs.walk { path, node ->
             if (cancelled) throw IOException("cancelled")
             val rel = "$mount/$path"
-            val f = File(root, rel)
+            val f = SafePaths.resolve(root, rel)
             when {
                 node.isDir -> f.mkdirs()
                 node.isLink -> symlinks.add(fs.linkTarget(node) to "/$rel")
@@ -659,8 +660,7 @@ class Importer(
     // ------------------------------------------------------------------ файлы, ссылки, права
 
     private fun writeFile(rel: String, i: InputStream, mode: Int?) {
-        val f = File(root, rel)
-        if (!f.canonicalPath.startsWith(root.canonicalPath)) return // защита от ../ в архиве
+        val f = SafePaths.resolve(root, rel)
         f.parentFile?.mkdirs()
         if (runCatching { android.system.OsConstants.S_ISLNK(Os.lstat(f.path).st_mode) }.getOrDefault(false)) f.delete()
         f.outputStream().buffered(1 shl 20).use { o -> bytes += i.copyTo(o, 1 shl 16) }
@@ -704,7 +704,7 @@ class Importer(
             val type = e.mode and 0xF000
             val n = e.name
             if (n.isEmpty() || n == "." || n.startsWith("system/") || n.startsWith("data/") || n.startsWith("dev/") || n.startsWith("proc") || n.startsWith("sys/")) return@forEach
-            val f = File(root, n)
+            val f = SafePaths.resolve(root, n)
             when (type) {
                 0x4000 -> f.mkdirs()
                 0xA000 -> symlinks.add(String(e.data) to "/$n")
@@ -718,18 +718,17 @@ class Importer(
         var made = 0
         for ((target, link) in symlinks) {
             val rel = link.trimStart('/')
-            val f = File(root, rel)
-            if (!f.canonicalPath.startsWith(root.canonicalPath)) continue
+            val f = SafePaths.resolve(root, rel)
             f.parentFile?.mkdirs()
-            val t = relTarget(link, target)
+            val t = SafePaths.linkTarget(root, f, target)
             runCatching {
                 if (f.exists() || isLink(f)) { if (f.isDirectory && !isLink(f)) return@runCatching; f.delete() }
                 Os.symlink(t, f.absolutePath); made++
             }
         }
         for ((p, mode, rec) in perms) {
-            val f = File(root, p.trimStart('/'))
-            if (rec) f.walkTopDown().filter { it.isFile }.forEach { applyMode(it, mode) } else if (f.isFile) applyMode(f, mode)
+            val f = if (p == "/" || p == ".") root else SafePaths.resolve(root, p.trimStart('/'))
+            if (rec) f.walkTopDown().onEnter { !isLink(it) && SafePaths.contains(root, it) }.filter { it.isFile && !isLink(it) && SafePaths.contains(root, it) }.forEach { applyMode(it, mode) } else if (f.isFile) applyMode(f, mode)
         }
         // исполняемые — всё в bin/xbin/sbin
         for (d in listOf("system/bin", "system/xbin", "sbin", "vendor/bin", "system/vendor/bin")) {
@@ -773,16 +772,6 @@ class Importer(
             }
         }
         if (made > 0) log("sh/toolbox symlinks created: $made (missing from archive)")
-    }
-
-    private fun relTarget(link: String, target: String): String {
-        if (!target.startsWith("/")) return target
-        val from = link.trimStart('/').split('/').dropLast(1)
-        val to = target.trimStart('/').split('/').filter { it.isNotEmpty() }
-        var i = 0
-        while (i < from.size && i < to.size && from[i] == to[i]) i++
-        val ups = List(from.size - i) { ".." }
-        return (ups + to.drop(i)).joinToString("/").ifEmpty { "." }
     }
 
     companion object {

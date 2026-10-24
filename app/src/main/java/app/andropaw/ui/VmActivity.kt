@@ -517,8 +517,8 @@ class VmActivity : ComponentActivity() {
         fun save(b: android.graphics.Bitmap) = thread {
             val ok = runCatching {
                 hostDir.mkdirs()
-                java.io.File(hostDir, name).outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-            }.isSuccess
+                java.io.File(hostDir, name).outputStream().use { check(b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+            }.also { b.recycle() }.isSuccess
             toast(if (ok) getString(R.string.m_screenshot_saved, vm.img.sdcardPath.trimEnd('/') + "/Pictures/$name") else getString(R.string.m_failed))
             // the guest's media scanner picks the file up for its gallery
             if (ok) guestAsync("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${vm.img.sdcardPath.trimEnd('/')}/Pictures/$name")
@@ -526,9 +526,14 @@ class VmActivity : ComponentActivity() {
         guest.snapshot()?.let { save(it); return }
         if (surfaceView.width <= 0 || surfaceView.height <= 0) { toast(getString(R.string.m_failed)); return }
         val b = android.graphics.Bitmap.createBitmap(surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888)
-        android.view.PixelCopy.request(surfaceView, b, { r ->
-            if (r == android.view.PixelCopy.SUCCESS) save(b) else toast(getString(R.string.m_failed))
-        }, android.os.Handler(mainLooper))
+        runCatching {
+            android.view.PixelCopy.request(surfaceView, b, { r ->
+                if (r == android.view.PixelCopy.SUCCESS) save(b) else {
+                    b.recycle()
+                    toast(getString(R.string.m_failed))
+                }
+            }, android.os.Handler(mainLooper))
+        }.onFailure { b.recycle(); toast(getString(R.string.m_failed)) }
     }
 
     /**

@@ -39,6 +39,7 @@ class AdbServer(private val vm: GuestVm) {
             thread(name = "adb-accept", isDaemon = true) {
                 while (!s.isClosed) {
                     val c = runCatching { s.accept() }.getOrNull() ?: break
+                    if (conns.size >= 8) { c.close(); continue }
                     conns.add(c)
                     thread(name = "adb-conn", isDaemon = true) {
                         runCatching { Conn(c).run() }.onFailure { if (!s.isClosed) vm.log("adb: ${it.message}") }
@@ -71,29 +72,34 @@ class AdbServer(private val vm: GuestVm) {
 
         fun run() {
             sock.tcpNoDelay = true
-            while (true) {
-                val h = ByteArray(24)
-                if (!readFully(input, h)) break
-                val b = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN)
-                val cmd = b.int; val a0 = b.int; val a1 = b.int; val len = b.int
-                val data = ByteArray(len)
-                if (len > 0 && !readFully(input, data)) break
-                when (cmd) {
-                    CNXN -> {
-                        maxData = a1.coerceIn(4096, 1024 * 1024)
-                        val p = vm.props
-                        val banner = "device::ro.product.name=${p.get("ro.product.name") ?: "aemu"};" +
-                            "ro.product.model=${p.get("ro.product.model") ?: vm.img.name};" +
-                            "ro.product.device=${p.get("ro.product.device") ?: "aemu"};\u0000"
-                        send(CNXN, VERSION, maxData, banner.toByteArray())
+            try {
+                while (true) {
+                    val h = ByteArray(24)
+                    if (!readFully(input, h)) break
+                    val b = ByteBuffer.wrap(h).order(ByteOrder.LITTLE_ENDIAN)
+                    val cmd = b.int; val a0 = b.int; val a1 = b.int; val len = b.int
+                    require(len in 0..65536) { "Invalid ADB packet length: $len" }
+                    val data = ByteArray(len)
+                    if (len > 0 && !readFully(input, data)) break
+                    when (cmd) {
+                        CNXN -> {
+                            maxData = a1.coerceIn(4096, 65536)
+                            val p = vm.props
+                            val banner = "device::ro.product.name=${p.get("ro.product.name") ?: "aemu"};" +
+                                "ro.product.model=${p.get("ro.product.model") ?: vm.img.name};" +
+                                "ro.product.device=${p.get("ro.product.device") ?: "aemu"};\u0000"
+                            send(CNXN, VERSION, maxData, banner.toByteArray())
+                        }
+                        OPEN -> open(a0, String(data).trimEnd('\u0000'))
+                        OKAY -> streams[a1]?.acked(a0)
+                        WRTE -> streams[a1]?.let { it.feed(data); send(OKAY, it.local, it.remote) }
+                        CLSE -> streams.remove(a1)?.closedByPeer()
                     }
-                    OPEN -> open(a0, String(data).trimEnd('\u0000'))
-                    OKAY -> streams[a1]?.acked(a0)
-                    WRTE -> streams[a1]?.let { it.feed(data); send(OKAY, it.local, it.remote) }
-                    CLSE -> streams.remove(a1)?.closedByPeer()
                 }
+            } finally {
+                streams.values.forEach { it.closedByPeer() }
+                streams.clear()
             }
-            streams.values.forEach { it.closedByPeer() }
         }
 
         @Synchronized fun send(cmd: Int, a0: Int, a1: Int, data: ByteArray = EMPTY, off: Int = 0, len: Int = data.size) {
@@ -105,6 +111,7 @@ class AdbServer(private val vm: GuestVm) {
         }
 
         private fun open(remote: Int, service: String) {
+            require(streams.size < 8) { "Too many ADB streams" }
             val s = Stream(this, nextId++, remote)
             streams[s.local] = s
             send(OKAY, s.local, remote)
@@ -120,13 +127,13 @@ class AdbServer(private val vm: GuestVm) {
 
     /** One adb stream: incoming WRTE payloads as an InputStream, outgoing writes paced by the peer's OKAYs. */
     private class Stream(private val c: Conn, val local: Int, var remote: Int) {
-        private val q = LinkedBlockingQueue<ByteArray>()
+        private val q = LinkedBlockingQueue<ByteArray>(4)
         private val window = Semaphore(1)
         @Volatile var closed = false
 
-        fun feed(d: ByteArray) { if (d.isNotEmpty()) q.put(d) }
+        fun feed(d: ByteArray) { if (d.isNotEmpty() && !q.offer(d)) throw java.io.IOException("ADB input queue full") }
         fun acked(r: Int) { remote = r; window.release() }
-        fun closedByPeer() { closed = true; q.put(EMPTY); window.release(100) }
+        fun closedByPeer() { closed = true; q.clear(); q.offer(EMPTY); window.release(100) }
 
         val inp = object : InputStream() {
             private var cur: ByteArray = EMPTY
@@ -166,7 +173,7 @@ class AdbServer(private val vm: GuestVm) {
         }
 
         fun close() {
-            if (!closed) { closed = true; runCatching { c.send(CLSE, local, remote) } }
+            if (!closed) { closedByPeer(); runCatching { c.send(CLSE, local, remote) } }
             c.drop(this)
         }
     }
@@ -294,9 +301,9 @@ class AdbServer(private val vm: GuestVm) {
         if (sd != null) for (pre in Sdcard.guestPaths(vm.img)) {
             val g = "/$pre"
             if (p == g) return sd
-            if (p.startsWith("$g/")) return File(sd, p.removePrefix("$g/"))
+            if (p.startsWith("$g/")) return SafePaths.resolve(sd, p.removePrefix("$g/"))
         }
-        return if (p == "/") vm.paths.root else File(vm.paths.root, p.removePrefix("/"))
+        return if (p == "/") vm.paths.root else SafePaths.resolve(vm.paths.root, p.removePrefix("/"))
     }
 
     private fun sync(s: Stream) {
@@ -307,6 +314,7 @@ class AdbServer(private val vm: GuestVm) {
             if (!readFully(i, h)) break
             val id = String(h, 0, 4, Charsets.ISO_8859_1)
             val len = le(h, 4)
+            require(len in 0..1024) { "Invalid sync path length: $len" }
             val arg = ByteArray(len).also { if (!readFully(i, it)) return }
             when (id) {
                 "STAT" -> {
@@ -337,6 +345,7 @@ class AdbServer(private val vm: GuestVm) {
                         if (!readFully(i, h)) { fo?.close(); return }
                         val cid = String(h, 0, 4, Charsets.ISO_8859_1); val n = le(h, 4)
                         if (cid == "DATA") {
+                            if (n !in 0..65536) { fo?.close(); throw java.io.IOException("Invalid sync data length: $n") }
                             val chunk = ByteArray(n); if (!readFully(i, chunk)) { fo?.close(); return }
                             if (fo != null && err == null) runCatching { fo.write(chunk) }.onFailure { err = it.message }
                         } else if (cid == "DONE") {

@@ -35,7 +35,8 @@ fun UpdateDialog(
     onStartDownload: (ReleaseInfo) -> Unit,
     onCancelDownload: () -> Unit,
     onInstall: (File) -> Unit,
-    onOpenUrl: (String) -> Unit = {}
+    onOpenUrl: (String) -> Unit = {},
+    onRetry: (() -> Unit)? = null
 ) {
     when (state) {
         is UpdateState.Idle -> {}
@@ -136,7 +137,10 @@ fun UpdateDialog(
                 summary = stringResource(R.string.update_error, state.message),
                 onDismissRequest = onDismiss,
             ) {
-                DialogButtonRow(listOf(DialogAction(stringResource(R.string.ok), onClick = onDismiss, primary = true)))
+                DialogButtonRow(buildList {
+                    add(DialogAction(stringResource(R.string.close), onClick = onDismiss))
+                    onRetry?.let { add(DialogAction(stringResource(R.string.retry), onClick = it, primary = true)) }
+                })
             }
         }
     }

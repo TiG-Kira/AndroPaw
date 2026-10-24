@@ -6,11 +6,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
@@ -47,51 +50,53 @@ object AppUpdateManager {
         runCatching {
             val url = URL(RELEASES_API)
             val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 15000
-            conn.readTimeout = 15000
-            conn.setRequestProperty("Accept", "application/vnd.github+json")
-            conn.setRequestProperty("User-Agent", "AndroPaw-App")
+            try {
+                conn.connectTimeout = 15000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                conn.setRequestProperty("User-Agent", "AndroPaw-App")
 
-            if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                throw Exception("HTTP ${conn.responseCode}: ${conn.responseMessage}")
-            }
+                if (conn.responseCode != HttpURLConnection.HTTP_OK) {
+                    throw Exception("HTTP ${conn.responseCode}: ${conn.responseMessage}")
+                }
 
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            val array = JSONArray(text)
-            if (array.length() == 0) return@runCatching null
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                val array = JSONArray(text)
+                if (array.length() == 0) return@runCatching null
 
-            for (i in 0 until array.length()) {
-                val rel = array.getJSONObject(i)
-                if (rel.optBoolean("draft", false)) continue
+                for (i in 0 until array.length()) {
+                    val rel = array.getJSONObject(i)
+                    if (rel.optBoolean("draft", false) || rel.optBoolean("prerelease", false)) continue
 
-                val tagName = rel.optString("tag_name", "").trim()
-                val versionName = tagName.removePrefix("v").removePrefix("V")
-                val title = rel.optString("name", tagName)
-                val body = rel.optString("body", "")
+                    val tagName = rel.optString("tag_name", "").trim()
+                    val versionName = tagName.removePrefix("v").removePrefix("V")
+                    val title = rel.optString("name", tagName)
+                    val body = rel.optString("body", "")
 
-                val assets = rel.optJSONArray("assets") ?: continue
-                // 并存包（app.andropaw.0003）必须拿 0003 的包，标准包拿标准包——装错包名安装直接失败
-                val wantV0003 = context?.packageName?.endsWith("0003") == true
-                val wantAsset = if (wantV0003) "app.andropaw.0003.apk" else "app.andropaw.apk"
-                for (j in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(j)
-                    val assetName = asset.optString("name", "")
-                    if (assetName.equals(wantAsset, ignoreCase = true)) {
-                        val downloadUrl = asset.getString("browser_download_url")
-                        val sizeBytes = asset.optLong("size", 0L)
-                        return@runCatching ReleaseInfo(
-                            versionName = versionName,
-                            tagName = tagName,
-                            title = title,
-                            body = body,
-                            downloadUrl = downloadUrl,
-                            fileName = assetName,
-                            sizeBytes = sizeBytes
-                        )
+                    val assets = rel.optJSONArray("assets") ?: continue
+                    // 并存包（app.andropaw.0003）必须拿 0003 的包，标准包拿标准包——装错包名安装直接失败
+                    val wantV0003 = context?.packageName?.endsWith("0003") == true
+                    val wantAsset = if (wantV0003) "app.andropaw.0003.apk" else "app.andropaw.apk"
+                    for (j in 0 until assets.length()) {
+                        val asset = assets.getJSONObject(j)
+                        val assetName = asset.optString("name", "")
+                        if (assetName.equals(wantAsset, ignoreCase = true)) {
+                            val downloadUrl = asset.getString("browser_download_url")
+                            val sizeBytes = asset.optLong("size", 0L)
+                            return@runCatching ReleaseInfo(
+                                versionName = versionName,
+                                tagName = tagName,
+                                title = title,
+                                body = body,
+                                downloadUrl = downloadUrl,
+                                fileName = assetName,
+                                sizeBytes = sizeBytes
+                            )
+                        }
                     }
                 }
-            }
-            null
+                null
+            } finally { conn.disconnect() }
         }
     }
 
@@ -134,60 +139,83 @@ object AppUpdateManager {
         release: ReleaseInfo,
         onProgress: (Float, Long, Long) -> Unit
     ): File = withContext(Dispatchers.IO) {
-        val updatesDir = File(context.getExternalFilesDir(null) ?: context.cacheDir, "updates")
-        if (!updatesDir.exists()) updatesDir.mkdirs()
-
-        // Очищаем старые apk перед новой загрузкой
-        updatesDir.listFiles()?.forEach { if (it.extension.equals("apk", ignoreCase = true)) it.delete() }
-
-        val targetFile = File(updatesDir, "andropaw-${release.versionName}.apk")
-
-        var currentUrl = release.downloadUrl
-        var conn: HttpURLConnection
-        var redirects = 0
-        while (true) {
-            val url = URL(currentUrl)
-            conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 15000
-            conn.readTimeout = 30000
-            conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "AndroPaw-App")
-
-            val code = conn.responseCode
-            if (code in listOf(HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, 307, 308)) {
-                val newUrl = conn.getHeaderField("Location")
-                conn.disconnect()
-                if (newUrl != null && redirects < 5) {
-                    currentUrl = newUrl
-                    redirects++
+        // App-private storage prevents other apps from replacing a downloaded installer.
+        val updatesDir = File(context.cacheDir, "updates")
+        check(updatesDir.isDirectory || updatesDir.mkdirs()) { "Cannot create update directory" }
+        if (release.sizeBytes > 0 && updatesDir.usableSpace - (16L shl 20) < release.sizeBytes) {
+            throw IOException("Not enough storage for update: ${formatBytes(release.sizeBytes)} required")
+        }
+        val partial = File.createTempFile("andropaw-", ".part", updatesDir)
+        val targetFile = File(updatesDir, partial.nameWithoutExtension + ".apk")
+        var connection: HttpURLConnection? = null
+        try {
+            var url = URL(release.downloadUrl)
+            var redirects = 0
+            while (true) {
+                require(url.protocol == "https") { "Update download requires HTTPS" }
+                currentCoroutineContext().ensureActive()
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000
+                    readTimeout = 30000
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", "AndroPaw-App")
+                    setRequestProperty("Accept-Encoding", "identity")
+                }
+                connection = conn
+                val code = conn.responseCode
+                if (code in listOf(301, 302, 303, 307, 308)) {
+                    val location = conn.getHeaderField("Location")
+                        ?: throw IOException("Redirect without Location")
+                    if (++redirects > 5) throw IOException("Too many redirects")
+                    url = URL(url, location)
+                    conn.disconnect()
                     continue
                 }
+                if (code != HttpURLConnection.HTTP_OK) throw IOException("HTTP $code: ${conn.responseMessage}")
+                break
             }
-            break
-        }
-
-        if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-            throw Exception("HTTP ${conn.responseCode}: ${conn.responseMessage}")
-        }
-
-        val totalLength = conn.contentLengthLong.takeIf { it > 0 } ?: release.sizeBytes
-        var downloadedBytes = 0L
-
-        conn.inputStream.use { input ->
-            FileOutputStream(targetFile).use { output ->
-                val buffer = ByteArray(16 * 1024)
-                var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                    downloadedBytes += bytesRead
-                    val progress = if (totalLength > 0) downloadedBytes.toFloat() / totalLength else 0f
-                    onProgress(progress.coerceIn(0f, 1f), downloadedBytes, totalLength)
+            val conn = checkNotNull(connection)
+            val total = conn.contentLengthLong.takeIf { it > 0 } ?: release.sizeBytes
+            var downloaded = 0L
+            var lastProgress = 0L
+            conn.inputStream.use { input ->
+                FileOutputStream(partial).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        downloaded += count
+                        if ((total > 0 && downloaded > total) ||
+                            (release.sizeBytes > 0 && downloaded > release.sizeBytes)) {
+                            throw IOException("Update size exceeds expected length")
+                        }
+                        output.write(buffer, 0, count)
+                        val now = System.nanoTime()
+                        if (now - lastProgress >= 100_000_000L) {
+                            onProgress(if (total > 0) (downloaded.toFloat() / total).coerceIn(0f, 1f) else 0f, downloaded, total)
+                            lastProgress = now
+                        }
+                    }
+                    output.fd.sync()
                 }
-                output.flush()
             }
+            currentCoroutineContext().ensureActive()
+            if (downloaded == 0L || (total > 0 && downloaded != total) ||
+                (release.sizeBytes > 0 && downloaded != release.sizeBytes)) {
+                throw IOException("Incomplete update: $downloaded / $total bytes")
+            }
+            val archive = context.packageManager.getPackageArchiveInfo(partial.path, 0)
+                ?: throw IOException("Downloaded file is not a valid APK")
+            if (archive.packageName != context.packageName) throw IOException("Update package does not match this app")
+            if (!partial.renameTo(targetFile)) throw IOException("Cannot finalize update")
+            updatesDir.listFiles()?.filter { it != targetFile && it.extension == "apk" }?.forEach { it.delete() }
+            onProgress(1f, downloaded, total)
+            targetFile
+        } finally {
+            connection?.disconnect()
+            partial.delete()
         }
-
-        targetFile
     }
 
     /**

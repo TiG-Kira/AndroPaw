@@ -4,6 +4,7 @@ import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
 import android.view.View
+import androidx.annotation.RequiresApi
 import androidx.annotation.RawRes
 import app.andropaw.R
 import kotlin.math.floor
@@ -95,6 +96,7 @@ object AboutBgEffect {
      *   controller.start()   // onAttached / onResume
      *   controller.stop()    // onDetached / onPause
      */
+    @RequiresApi(33)
     class ShaderController(
         private val target: View,
         private val params: BgParams,
@@ -236,7 +238,7 @@ object AboutBgEffect {
      * Entry point — returns null on API < 33 (caller should fall back to Brush).
      */
     fun createFor(target: View, isDark: Boolean): ShaderController? {
-        if (Build.VERSION.SDK_INT < 31) return null
+        if (Build.VERSION.SDK_INT < 33) return null
         return ShaderController(target, getParams(isDark), R.raw.about_bg_shader)
     }
 }
