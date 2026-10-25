@@ -337,29 +337,40 @@ class AdbServer(private val vm: GuestVm) {
                     val spec = String(arg)
                     val path = spec.substringBeforeLast(',')
                     val mode = spec.substringAfterLast(',', "420").toIntOrNull() ?: 420
-                    val f = host(path)
+                    // Stage the upload beside its destination. A disconnected adb client must not leave
+                    // an existing guest file truncated; rename publishes the new bytes only after DONE.
+                    val requested = host(path)
+                    val f = if (requested.exists()) requested.canonicalFile else requested
                     var err: String? = null
                     runCatching { f.parentFile?.mkdirs(); if (f.isDirectory) error("is a directory") }.onFailure { err = it.message }
-                    val fo = if (err == null) runCatching { f.outputStream().buffered(65536) }.onFailure { err = it.message }.getOrNull() else null
+                    val tmp = if (err == null) runCatching {
+                        File.createTempFile(".${f.name.take(32)}.adb-", ".part", f.parentFile)
+                    }.onFailure { err = it.message }.getOrNull() else null
+                    val fo = if (tmp != null) runCatching { tmp.outputStream().buffered(65536) }.onFailure { err = it.message }.getOrNull() else null
                     while (true) {
-                        if (!readFully(i, h)) { fo?.close(); return }
+                        if (!readFully(i, h)) { fo?.close(); tmp?.delete(); return }
                         val cid = String(h, 0, 4, Charsets.ISO_8859_1); val n = le(h, 4)
                         if (cid == "DATA") {
-                            if (n !in 0..65536) { fo?.close(); throw java.io.IOException("Invalid sync data length: $n") }
-                            val chunk = ByteArray(n); if (!readFully(i, chunk)) { fo?.close(); return }
+                            if (n !in 0..65536) { fo?.close(); tmp?.delete(); throw java.io.IOException("Invalid sync data length: $n") }
+                            val chunk = ByteArray(n); if (!readFully(i, chunk)) { fo?.close(); tmp?.delete(); return }
                             if (fo != null && err == null) runCatching { fo.write(chunk) }.onFailure { err = it.message }
                         } else if (cid == "DONE") {
-                            runCatching { fo?.close() }
+                            runCatching { fo?.close() }.onFailure { err = it.message ?: "cannot finish upload" }
                             if (err == null) {
-                                f.setReadable(true, false)
-                                if (mode and 0x49 != 0) f.setExecutable(true, false)
-                                if (n > 0) f.setLastModified(n.toLong() * 1000)
+                                val staged = tmp ?: throw java.io.IOException("upload staging file unavailable")
+                                runCatching {
+                                    android.system.Os.chmod(staged.absolutePath, mode and 0xFFF)
+                                    if (n > 0) staged.setLastModified(n.toLong() * 1000)
+                                    android.system.Os.rename(staged.absolutePath, f.absolutePath)
+                                }
+                                    .onFailure { err = it.message ?: "cannot publish uploaded file" }
                             }
                             break
                         } else { err = "unexpected $cid"; fo?.close(); break }
                     }
                     if (err == null) { o.write(id4("OKAY")); o.write(ByteArray(4)) }
                     else { val m = "${f.name}: $err".toByteArray(); o.write(id4("FAIL")); o.write(le4(m.size)); o.write(m) }
+                    runCatching { tmp?.delete() }
                 }
                 "RECV" -> {
                     val f = host(String(arg))
