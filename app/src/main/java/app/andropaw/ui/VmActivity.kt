@@ -597,20 +597,33 @@ class VmActivity : ComponentActivity() {
         recorder = r; recOn.value = true
     }
 
-    // APK picked on the host: copied into the shared card folder, then installed by the guest's package manager
-    private val pickApk = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@registerForActivityResult
+    // APKs picked on the host are streamed into unique shared-card files and installed in order.
+    private val pickApks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@registerForActivityResult
         val dir = app.andropaw.core.Sdcard.hostDir(vm.paths)
         if (dir == null) { toast(getString(R.string.m_failed)); return@registerForActivityResult }
-        toast(getString(R.string.m_install_apk_start))
+        toast(getString(R.string.m_install_apk_start) + if (uris.size > 1) " (${uris.size})" else "")
         thread {
-            val ok = runCatching {
-                contentResolver.openInputStream(uri)!!.use { i -> java.io.File(dir, "aemu-install.apk").outputStream().use { o -> i.copyTo(o) } }
-            }.isSuccess
-            if (!ok) { toast(getString(R.string.m_failed)); return@thread }
-            val out = runCatching { vm.guestShell("pm install -r " + vm.img.sdcardPath.trimEnd('/') + "/aemu-install.apk", 300_000) }.getOrElse { it.toString() }
-            runCatching { app.andropaw.core.TreeFixer(this@VmActivity, vm.paths, vm.img, vm::log).seedOwners() }
-            toast(out.trim().lines().lastOrNull { it.isNotBlank() }?.take(200) ?: getString(R.string.m_failed))
+            var installed = 0
+            val failures = ArrayList<String>()
+            for ((index, uri) in uris.withIndex()) {
+                val name = "aemu-install-${java.util.UUID.randomUUID()}.apk"
+                val staged = java.io.File(dir, name)
+                val result = runCatching {
+                    val input = contentResolver.openInputStream(uri) ?: error("Cannot open selected APK")
+                    input.use { i -> staged.outputStream().buffered(128 * 1024).use { o -> i.copyTo(o, 128 * 1024) } }
+                    val guestPath = vm.img.sdcardPath.trimEnd('/') + "/" + name
+                    vm.guestShell("pm install -r ${q(guestPath)}", 300_000)
+                }
+                val output = result.getOrNull()?.trim().orEmpty()
+                if (result.isSuccess && output.lineSequence().lastOrNull { it.isNotBlank() } == "Success") installed++
+                else failures += "${index + 1}: ${(result.exceptionOrNull()?.message ?: output).ifBlank { getString(R.string.m_failed) }.take(120)}"
+                runCatching { staged.delete() }
+            }
+            if (installed > 0) runCatching { app.andropaw.core.TreeFixer(this@VmActivity, vm.paths, vm.img, vm::log).seedOwners() }
+            val summary = if (failures.isEmpty()) "$installed/${uris.size} APK installed" else
+                "$installed/${uris.size} APK installed; failed: ${failures.take(3).joinToString("; ")}"
+            toast(summary.take(400))
         }
     }
 
@@ -902,7 +915,7 @@ class VmActivity : ComponentActivity() {
                     add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
                     add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
                     add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
-                        pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
+                        pickApks.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
                     })
                     add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
                     add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })

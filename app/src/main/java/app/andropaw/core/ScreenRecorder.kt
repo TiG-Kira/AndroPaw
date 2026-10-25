@@ -31,8 +31,12 @@ class ScreenRecorder(
     val running: Boolean get() = live
     val file: File get() = out
 
-    fun start(): Boolean {
+    @Synchronized fun start(): Boolean {
         if (live) return true
+        if (w <= 0 || h <= 0) { log("recording: invalid frame size ${w}x$h"); return false }
+        var codec: MediaCodec? = null
+        var surface: Surface? = null
+        var muxer: MediaMuxer? = null
         return runCatching {
             out.parentFile?.mkdirs()
             val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
@@ -41,19 +45,28 @@ class ScreenRecorder(
                 setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             }
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val surface = codec.createInputSurface()
+            surface = codec.createInputSurface()
             codec.start()
-            val muxer = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             live = true
-            worker = Thread({ run(codec, surface, muxer) }, "screen-rec").apply { start() }
+            val c = requireNotNull(codec)
+            val s = requireNotNull(surface)
+            val m = requireNotNull(muxer)
+            worker = Thread({ run(c, s, m) }, "screen-rec").apply { start() }
             log("recording: started, ${w}x$h -> ${out.name}")
-        }.onFailure { live = false; log("recording: cannot start: ${it.message}") }.isSuccess
+        }.onFailure {
+            live = false
+            runCatching { codec?.stop() }; runCatching { codec?.release() }
+            runCatching { surface?.release() }; runCatching { muxer?.release() }
+            runCatching { out.delete() }
+            log("recording: cannot start: ${it.message}")
+        }.isSuccess
     }
 
     /** Stops and waits for the file to be finished. */
-    fun stop() {
+    @Synchronized fun stop() {
         if (!live) return
         live = false
         runCatching { worker?.join(5000) }
