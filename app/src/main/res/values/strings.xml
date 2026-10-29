@@ -277,4 +277,30 @@
     <string name="as_led">Notification light</string>
     <string name="as_led_sub">Show the guest phone’s LED above its screen</string>
     <string name="tab_emulator">Emulator</string>
+    <!-- OpenHarmony spaces -->
+    <string name="oh_title">OpenHarmony</string>
+    <string name="oh_subtitle">Lightweight OpenHarmony spaces on this phone — no root required</string>
+    <string name="oh_runtime">Runtime</string>
+    <string name="oh_runtime_missing">No OpenHarmony runtime installed yet</string>
+    <string name="oh_download_install">Download &amp; install</string>
+    <string name="oh_downloading">Downloading %1$s</string>
+    <string name="oh_verifying">Verifying…</string>
+    <string name="oh_failed">Failed: %1$s</string>
+    <string name="oh_retry">Retry</string>
+    <string name="oh_check_updates">Check for updates</string>
+    <string name="oh_cache">Cache</string>
+    <string name="oh_cache_usage">Cache %1$s · free %2$s</string>
+    <string name="oh_clean_partial">Clear partial</string>
+    <string name="oh_clean_archives">Clear archives</string>
+    <string name="oh_clean_runtimes">Remove runtimes</string>
+    <string name="oh_spaces">Spaces</string>
+    <string name="oh_new_space">New space</string>
+    <string name="oh_spaces_empty">Create a space after installing the runtime</string>
+    <string name="oh_space_default">Space %1$d</string>
+    <string name="oh_boot_preparing">Preparing the space…</string>
+    <string name="oh_boot_booting">Starting OpenHarmony…</string>
+    <string name="oh_boot_failed">OpenHarmony failed to start</string>
+    <string name="oh_settings_row">OpenHarmony spaces</string>
+    <string name="oh_settings_row_sub">Download, install and run OpenHarmony</string>
+    <string name="oh_manage">Manage</string>
 </resources>
