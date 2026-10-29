@@ -33,6 +33,8 @@ offset 0x08  u64  session     // 会话号 == const.ohspace.display.session 参�
 | 1 | 宿主→guest | 24 | HELLO：头后 8 字节必须为 0（0x19db8 校验 [len-8..len)==0） |
 | 2 | guest→宿主 | 64 | CONFIG 应答（见 §4） |
 | 3 | 宿主→guest | 24 | POWER：payload u32@0x10 ∈ {0,1}（0x19e30），写 state+0x14 和 +0xbf |
+| 6 | 宿主→guest | 24 | KEY_BACK（input.sock，见 §10） |
+| 7 | 宿主→guest | 24 | KEY_HOME（input.sock，见 §10） |
 
 > 触摸不走 display.sock（guest 端该连接只收 24 字节 kind1/3）。
 > guest 内触摸验证函数 `Ui::ValidTouch`（0xfed4）存在但消费方在 MMI 栈
@@ -138,12 +140,24 @@ seq     --reader CAS--> seq|bit62(0x4000…) --dtor CAS--> 0    // 读完释放
 |------|------|------|------|
 | 1 | 宿主→guest | 24 | HELLO：guest 收到后 `OpenDevices()`（创建 "OHSpace Touchscreen" 等 uinput 设备）并回一条 24B kind1 应答；此后才接受触摸 |
 | 5 | 宿主→guest | 216 | TOUCH：Header(16) + TouchMessage(200)，见下 |
-| 6 | 宿主→guest | 24 | KEY → `Key(2)` |
-| 7 | 宿主→guest | 24 | KEY → `Key(1)` |
+| 6 | 宿主→guest | 24 | KEY_BACK：→ `Key(2)` = KEYCODE_BACK 单击 |
+| 7 | 宿主→guest | 24 | KEY_HOME：→ `Key(1)` = KEYCODE_HOME 单击 |
 
-> kind6/7 的 `Key(1)/Key(2)` 只带常量参数，键码来源未定位（可能语义是
-> press/release 而键码在 24B 载荷 +0x10，或固定键）——键盘注入留待确认，
-> 触摸不受影响。
+**键码来源（`Key` 0x2fe27c 全量反汇编 + `.rodata` 0xbf3d0，2026-10-30 定案）**：
+
+- `Key(int)` 的参数是 **OH KeyCode**，写进 `KeyEvent+0xa0`：kind7→1=KEYCODE_HOME、
+  kind6→2=KEYCODE_BACK。`OpenDevices()` 成功后 MMI 还会自动注入一次 `Key(2802)`
+  （KEYCODE_WAKEUP，作为初始唤醒信号——2802 远超 action 值域，反证参数是键码）。
+- `.rodata 0xbf3d0` 的常量表 `{2, 3}` 按 `x9` 索引循环两遍写进 `KeyEvent+0xc0`
+  （**action**：2=DOWN、3=UP——`KeyEvent::ActionToShortStr`（实体 0x3ea530）的跳转
+  索引表 `{0,15,8,12}` 对应 4 个分支，act2→"K:D:"、act3→"K:U:"），同时
+  `KeyItem.pressed = (action==2)`。即每收到一条 kind6/7，MMI 服务端**自动合成一次
+  完整单击（DOWN+UP）**，宿主无需也不能分别发送按下/抬起。
+
+消息体就是纯 Header（24B = 16B Header + 8B 零填充），**没有键码字段**——键码完全由
+kind 编号决定。分发用的是 `memchr(msg, kind, 24)`（宽容解析，靠 Header 首字节）。
+另：`KeyEvent+0x38`（deviceId）= `OpenDevices()` 打开的 "OHSpace Navigation" uinput 节点
+的 fd（"OHSpace Touchscreen" fd 存 `this+0xc20`，Navigation fd 存 `this+0xc24`）。
 
 ### `Ohspace::Ui::TouchMessage`（`ValidTouch` 0xfed4 逐字段解出）
 
@@ -175,3 +189,80 @@ seq     --reader CAS--> seq|bit62(0x4000…) --dtor CAS--> 0    // 读完释放
 2. 发 HELLO(24B) → 收 guest 的 24B kind1 应答（在此之前发的触摸会被丢弃）
 3. 每个触摸事件组一条 216B 消息 send（SEQPACKET 单包）；MOVE 高频时每帧一条即可
 4. uinput 设备由 guest 的 `mmi_uinput_service`/`OpenDevices` 管理，宿主不碰 /dev/uinput
+
+## 11. GPU 直通（libohspace_gpu_client.so / vendor 三库逆向，2026-10-30）
+
+> 早前推测的 "broker.sock" **不存在**。真实拓扑是三个 unix socket + 一个 goldfish
+> pipe 兜底，传输层就是裸字节流（gfxstream 编码协议自带帧格式）。
+
+### 11.1 双方组件
+
+**guest 侧**（rootfs `system/lib64/chipset-sdk-sp/libohspace_gpu_client.so`，2.3MB）：
+gfxstream guest（goldfish-opengl）定制连接器：
+
+- `HostConnection::getOrCreate(VirtGpuCapset)` / `get()` / `rcEncoder()` / `gl2Encoder()`：
+  标准 gfxstream guest API，单例按 PID 复位（fork 安全，`getPuid` 0xcd4dc）。
+- `Ohspace::Gpu::Stream`：IOStream 的 socket 实现。构造
+  `Stream(name, flags)`；`connectSocket()`（0x1581e4）对 `name` 做 `rfind('/')` 截出
+  目录后 append `"gles.sock"`；`socket(AF_UNIX, SOCK_STREAM|CLOEXEC|NONBLOCK)` →
+  `SocketConnect()`（0x158d88：非阻塞 connect + EAGAIN/EINPROGRESS poll 重试）。
+- `SocketTransfer(fd, buf, len, isWrite)`（0x158f74）：**裸 send/recv**，
+  `recv(..., MSG_DONTWAIT)` + poll 重试；无自定义帧头、**无 SCM_RIGHTS**。
+- `processPipeInit()`（0x15877c）：`Stream::connect("pipe:GLProcessPipe")`（goldfish
+  pipe 兜底，通用连接器 `connect(const char*)` 内 `strcmp(name, "pipe:opengles")`）→
+  `writeFully(u32 100)` → `readFully(u64)` 返回 process handle。
+- 顶层 buffer API：`OhspaceGpuAllocate`（0xcde6c，`HostConnection::rcEncoder()
+  ->colorBufferCreate`，格式 GL_RGBA 0x1908 / GL_RGB565 0x8d62，宽高 ≤ 32M 像素）、
+  `OhspaceGpuPresent` / `OhspaceGpuBlank`（rcEncoder flush/post）、`OhspaceGpuUpload`、
+  `RetainColorBuffer`（一次性 Stream → connect → writeFully → exportReference）。
+  YUV 由 `Ohspace::Gpu::ConvertYuv` + `OhspaceBuffer::Layout` 处理。
+- buffer 锁文件：`/ohspace/run/buffer-lock-%02x`。
+
+**socket 拓扑**（guest 视角路径）：
+
+| 路径 | 用途 |
+|------|------|
+| `/ohspace/gpu/command.sock` | HostConnection 主通道（rc + GL 命令流），`new Stream("/ohspace/gpu/command.sock", 0x4000)` |
+| `/ohspace/gpu/gles.sock` | GLES 数据流（`connectSocket` 从通道名目录派生 `dir + "gles.sock"`） |
+| `/ohspace/gpu/fault` | `StopSession` 故障通知 |
+| `pipe:opengles` / `pipe:GLProcessPipe` | goldfish pipe 兜底（需 goldfish address space） |
+
+**宿主侧**（vendor APK，`lib/arm64-v8a/`，AndroPaw 已提取到 `.cache/mmparts/lib/`）：
+
+```
+libmmspace_gpu_jni.so      → JNI 门面：Mmspace::Gpu::{ Start(const Configuration&),
+                             Stop(), Healthy(), HasFrame(), ReadError(char*,size_t),
+                             SetWindow(ANativeWindow*, w, h) }
+libmmspace_gpu_renderer.so → rutabaga_gfx（Rust）+ kumquat server（Mesa virtio-gpu IPC）
+                             + cross-domain；支持后端 gfxstream-gles / gfxstream-composer /
+                             virgl / virgl2 / venus / cross-domain / drm / magma / rutabaga_2d；
+                             kumquat 协议常量 kumquat_gpu_protocol_{ctrl_hdr,cmd_submit,
+                             ctx_create,resource_create_blob,transfer_host_3d,get_capset,...}，
+                             默认 socket `/tmp/kumquat-gpu-0`；memfd_create 共享资源
+libmmspace_gfxstream.so    → gfxstream host backend（5MB）：
+                             gfxstream_backend_{set_window,detach_window,
+                             has_guest_posted_frame,reset_guest_posted_frame,set_vsync_hz}
+```
+
+### 11.2 端到端数据流
+
+```
+guest GL/EGL (GLESv3)
+  → libohspace_gpu_client (gfxstream gl2_enc/gl_enc/renderControl_enc 编码)
+  → /ohspace/gpu/command.sock + gles.sock (裸字节流)
+  → 宿主 rutabaga_gfx (kumquat server 收流 → 解 kumquat_gpu_protocol)
+  → gfxstream host backend (libmmspace_gfxstream) 解码 GL
+  → 宿主 GPU 渲染 → gfxstream_backend_set_window(ANativeWindow) 上屏
+```
+
+### 11.3 AndroPaw 落地路径
+
+1. 把 vendor APK 的三个 GPU 库（gpu_jni / gpu_renderer / gfxstream，共约 6.5MB）打进
+   AndroPaw APK 的 `jniLibs/arm64-v8a/`，JNI 侧直接调 `Mmspace::Gpu::*`
+   （Configuration 结构字段待逆向——renderer 内有 serde_json，可能是 JSON）。
+2. `SetWindow(ANativeWindow*, w, h)` 接 OhDisplayActivity 的 Surface；`HasFrame()`
+   轮询 guest posted frame。
+3. rootfs 侧确保 `/ohspace/gpu/` 目录存在（socket 由 rutabaga 监听创建，guest client
+   connect），`/tmp/kumquat-gpu-0` 与 `/ohspace/run/buffer-lock-*` 落在 guest 可见路径。
+4. guest 侧无需任何改动：libohspace_gpu_client 已在 ROM 里，连接失败会静默回落
+   （无 GPU 时 guest 仍可走软渲/合成器兜底）。
