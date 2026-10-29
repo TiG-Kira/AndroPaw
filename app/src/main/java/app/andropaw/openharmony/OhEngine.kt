@@ -90,6 +90,7 @@ object OhEngine {
 
             loadRuntimeLib(runtimeDir, "lib$libName.so")
             val ohVersion = runCatching { native.ohVersion() }.getOrDefault(space.ohVersion)
+            val runner = guestRunner(ctx)
 
             val cfg = JSONObject()
                 .put("space", space.id)
@@ -99,6 +100,7 @@ object OhEngine {
                 .put("runDir", OhSpaceStore.runDir(ctx, space.id).absolutePath)
                 .put("ohVersion", ohVersion)
                 .put("settings", space.settings.toJson())
+                .put("runner", runner?.absolutePath ?: "")
                 // the runner contract: the guest process is spawned through the musl loader
                 // shipped in the runtime package, pointed at the host-bridge unix socket
                 .put("env", JSONObject()
@@ -124,6 +126,7 @@ object OhEngine {
             runningSpaceId = space.id
             setState(State.BOOTING)
             log("boot: runtime ${runtimeDir.name}, openharmony $ohVersion, space ${space.id}")
+            log("launcher: ${runner?.name ?: "musl loader (no libaemu64 — the guest will see the host's paths)"}")
             surface?.let { native.ohSurface(it) }
             val rc = native.ohStart(cfg.toString())
             if (rc != 0) throw OhException("runner rejected the config (rc=$rc)")
@@ -137,6 +140,21 @@ object OhEngine {
             setState(State.FAILED)
         }
     }
+
+    /**
+     * The host-side guest launcher shipped with AndroPaw: `libaemu64_<api>.so`, the same runner
+     * the Android machines boot through. It loads the guest ELF, installs a seccomp filter and
+     * rewrites the guest's absolute paths under the runtime's root, so an OpenHarmony userland
+     * gets its own /system, /data and /dev while running as an ordinary app process — and its
+     * mount/chroot/unshare calls, which seccomp would kill, report success instead.
+     *
+     * The newest one wins: they differ only in the syscall tables of the Android release they
+     * were built for, and any of them is newer than what OpenHarmony needs.
+     */
+    private fun guestRunner(ctx: Context): File? =
+        File(ctx.applicationInfo.nativeLibraryDir).listFiles()
+            ?.filter { it.name.startsWith("libaemu64_") && it.name.endsWith(".so") && it.canExecute() }
+            ?.maxByOrNull { it.name.removePrefix("libaemu64_").removeSuffix(".so").toIntOrNull() ?: 0 }
 
     /** Attach the display surface of the current run (called from the activity's SurfaceView). */
     @Synchronized

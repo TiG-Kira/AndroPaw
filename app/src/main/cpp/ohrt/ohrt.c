@@ -344,6 +344,75 @@ static int find_exec(const char *rootfs, const char *exec, char *out, size_t out
     return -1;
 }
 
+/* The guest path that corresponds to a host path inside the rootfs ("/system/bin/init"). */
+static void guest_path_of(const char *rootfs, const char *exec_abs, char *out, size_t outsz) {
+    size_t rl = strlen(rootfs);
+    if (rl && !strncmp(exec_abs, rootfs, rl) && exec_abs[rl] == '/')
+        snprintf(out, outsz, "%s", exec_abs + rl);
+    else
+        snprintf(out, outsz, "%s", exec_abs);
+}
+
+/*
+ * Launch the guest through AndroPaw's own guest runner (libaemu64_<api>.so) — the same
+ * launcher the Android machines use.
+ *
+ * Running the guest binary directly is not enough: an OpenHarmony userland is full of
+ * absolute paths (/system/lib64, /data/service, /dev/unix/socket, /ohspace/run) and it opens
+ * them from every library, not only through libc entry points we could interpose. The runner
+ * loads the ELF itself, installs a seccomp filter and answers SIGSYS by rewriting *syscall*
+ * path arguments under AEMU64_ROOT, so the guest gets its own /system and /data even though
+ * it runs as an app process. It also answers mount/umount2/chroot/unshare/capset/setgroups
+ * with success — the calls seccomp kills in an app, and the ones OpenHarmony's init makes in
+ * its first job.
+ */
+static int spawn_guest_virt(const char *rootfs, const char *runner, const char *exec_guest,
+                            const char *host_sock, const char *data_dir) {
+    char tmpdir[300];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/tmp", data_dir);
+    mkdirs_deep(tmpdir);
+
+    static char e_root[600], e_api[600], e_tmp[400], e_ld[900];
+    char *envp[16];
+    int e = 0;
+    snprintf(e_root, sizeof(e_root), "AEMU64_ROOT=%s", rootfs);
+    snprintf(e_api, sizeof(e_api), "OHRT_HOST_API=%s", host_sock);
+    snprintf(e_tmp, sizeof(e_tmp), "TMPDIR=%s", tmpdir);
+    /* the guest's own files are owned by the app's uid; the guest must see them as root's */
+    snprintf(e_ld, sizeof(e_ld), "LD_LIBRARY_PATH=/system/lib64:/system/lib");
+    envp[e++] = e_root;
+    envp[e++] = e_api;
+    envp[e++] = e_tmp;
+    envp[e++] = e_ld;
+    envp[e++] = (char *)"AEMU64_ID=0,0";
+    envp[e++] = (char *)"PATH=/system/bin:/bin:/sbin:/usr/bin";
+    envp[e++] = (char *)"HOME=/root";
+    envp[e] = NULL;
+
+    /* aemu64 <argv0> <guest program> [args…]: the first argument after the runner is what the
+     * guest sees as argv[0], the second is what gets loaded. */
+    char *argv[4];
+    int a = 0;
+    argv[a++] = (char *)runner;
+    argv[a++] = (char *)exec_guest;
+    argv[a++] = (char *)exec_guest;
+    argv[a] = NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        setsid();
+        sigset_t mask;
+        sigemptyset(&mask);
+        sigprocmask(SIG_SETMASK, &mask, NULL);
+        chdir(data_dir);
+        execve(runner, argv, envp);
+        LOGE("execve %s failed: %s", runner, strerror(errno));
+        _exit(127);
+    }
+    return (int)pid;
+}
+
 static int spawn_guest(const char *rootfs, const char *loader, const char *exec,
                        const char *host_sock, const char *data_dir) {
     char libpath[768];
@@ -405,10 +474,12 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
     if (!json) return -1;
 
     char rootfs[256] = "", data_dir[256] = "", run_dir[256] = "";
-    char loader_dir[256] = "", exec_rel[128] = "", host_sock[300] = "";
+    char loader_dir[256] = "", exec_rel[128] = "", host_sock[300] = "", runner[256] = "";
     jgetstr(json, "rootfs", rootfs, sizeof(rootfs));
     jgetstr(json, "dataDir", data_dir, sizeof(data_dir));
     jgetstr(json, "runDir", run_dir, sizeof(run_dir));
+    /* the host-side guest launcher: libaemu64_<api>.so, resolved by OhEngine */
+    jgetstr(json, "runner", runner, sizeof(runner));
     /* nested env.* (one level) */
     const char *vs;
     size_t vl;
@@ -436,7 +507,7 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         (*env)->ReleaseStringUTFChars(env, cfg, json);
         return -2;
     }
-    char exec_abs[400], loader_abs[400];
+    char exec_abs[400], loader_abs[400], exec_guest[400];
     if (find_exec(rootfs, exec_rel[0] ? exec_rel : NULL, exec_abs, sizeof(exec_abs)) != 0) {
         rlog("boot failed: no guest init found under %s (looked for /sbin/init, /bin/init, /system/bin/init)",
              rootfs);
@@ -444,8 +515,11 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         (*env)->ReleaseStringUTFChars(env, cfg, json);
         return -3;
     }
-    if (find_loader(rootfs, loader_dir[0] ? loader_dir : NULL, loader_abs, sizeof(loader_abs)) != 0) {
-        rlog("boot failed: no musl loader (ld-musl-aarch64.so.1) in the runtime package");
+    guest_path_of(rootfs, exec_abs, exec_guest, sizeof(exec_guest));
+    int have_loader = find_loader(rootfs, loader_dir[0] ? loader_dir : NULL,
+                                  loader_abs, sizeof(loader_abs)) == 0;
+    if (!have_loader && !(runner[0] && is_file(runner))) {
+        rlog("boot failed: no musl loader (ld-musl-aarch64.so.1) and no guest runner to launch with");
         pthread_mutex_unlock(&g_lock);
         (*env)->ReleaseStringUTFChars(env, cfg, json);
         return -4;
@@ -462,8 +536,18 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
 
     /* 3. spawn the guest */
     g_stopping = 0;
-    int pid = spawn_guest(rootfs, loader_abs, exec_abs,
-                          host_sock[0] ? host_sock : "/dev/null", data_dir);
+    const char *sock = host_sock[0] ? host_sock : "/dev/null";
+    int pid = -1;
+    if (runner[0] && is_file(runner)) {
+        /* the guest keeps its own path names: /system, /data and /dev are its own directories */
+        pid = spawn_guest_virt(rootfs, runner, exec_guest, sock, data_dir);
+        if (pid > 0) rlog("guest pid %d: %s via runner %s (guest root /)", pid, exec_guest, runner);
+        else rlog("runner %s could not take %s, falling back to the musl loader", runner, exec_guest);
+    }
+    if (pid <= 0 && have_loader) {
+        pid = spawn_guest(rootfs, loader_abs, exec_abs, sock, data_dir);
+        if (pid > 0) rlog("guest pid %d: %s (loader %s)", pid, exec_abs, loader_abs);
+    }
     if (pid <= 0) {
         rlog("boot failed: fork/exec error");
         api_stop();
@@ -472,7 +556,6 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         return -5;
     }
     g_child = pid;
-    rlog("guest pid %d: %s (loader %s)", pid, exec_abs, loader_abs);
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseStringUTFChars(env, cfg, json);
     return 0;

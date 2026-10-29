@@ -89,6 +89,7 @@ object OhRuntimeRepository {
         tmp.mkdirs()
         try {
             extract(archive, tmp)
+            prepareRootfs(tmp)
             val info = OhRuntime(
                 version = pkg.version,
                 ohVersion = pkg.ohVersion,
@@ -136,6 +137,20 @@ object OhRuntimeRepository {
     }
 
     private fun isTar(h: ByteArray) = h.size > 262 && String(h, 257, 5, Charsets.ISO_8859_1) == "ustar"
+
+    /**
+     * The directories an OpenHarmony rootfs does not ship but its init writes into before any
+     * job of its own creates them: pre-init copies /ohspace/run/sandbox_policy, appspawn's job
+     * works under /mnt/sandbox and /dev/pids, and services put their sockets in /run and /var.
+     */
+    private val rootfsSkeleton = arrayOf(
+        "ohspace/run", "ohspace/etc", "mnt/sandbox", "dev/pts", "dev/pids", "run", "var", "tmp",
+    )
+
+    private fun prepareRootfs(root: File) {
+        val base = File(root, "rootfs").takeIf { it.isDirectory } ?: root
+        rootfsSkeleton.forEach { runCatching { File(base, it).mkdirs() } }
+    }
 
     private fun extractZip(archive: File, to: File) {
         ZipFile(archive).use { z ->
