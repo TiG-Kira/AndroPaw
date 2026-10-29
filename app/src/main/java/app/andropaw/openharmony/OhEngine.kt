@@ -28,6 +28,7 @@ object OhEngine {
     private class OhNative {
         external fun ohStart(configJson: String): Int
         external fun ohSurface(surface: Surface?): Int
+        external fun ohTouch(action: Int, x: Float, y: Float, pointerId: Int): Int
         external fun ohStop(): Int
         external fun ohVersion(): String
     }
@@ -162,6 +163,15 @@ object OhEngine {
         if (state == State.RUNNING || state == State.BOOTING) {
             runCatching { native.ohSurface(surface) }
         }
+    }
+
+    /**
+     * Inject a touch event into the guest's input channel. [action] uses the
+     * Android MotionEvent constants (they are the guest wire enum verbatim);
+     * [x]/[y] are normalised to the view size, [pointerId] the Android pointer id.
+     */
+    fun touch(action: Int, x: Float, y: Float, pointerId: Int) {
+        if (state == State.RUNNING) runCatching { native.ohTouch(action, x, y, pointerId) }
     }
 
     @Synchronized

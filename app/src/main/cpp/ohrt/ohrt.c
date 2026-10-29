@@ -25,17 +25,22 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define TAG "ohrt"
@@ -305,6 +310,435 @@ static void api_stop(void) {
     g_api_up = 0;
 }
 
+/* --------------------------------------------------- display bridge (Ohspace::Ui) */
+
+/*
+ * Protocol recovered from the runtime's libcomposer.z.so (docs/oh-protocol.md):
+ * the guest LISTENS on <rootfs>/ohspace/run/display.sock (SOCK_SEQPACKET), the
+ * host connects, sends a 24-byte HELLO and receives a 64-byte CONFIG carrying
+ * two fds over SCM_RIGHTS — a sealed memfd holding a triple-buffered frame
+ * ring, and the eventfd the guest writes after every Publish.
+ */
+
+#define OH_KIND_HELLO  1
+#define OH_KIND_CONFIG 2
+#define OH_SLOT_STATE_BIT_R (1ULL << 62)
+#define OH_SLOT_STATE_BIT_W (1ULL << 63)
+
+struct oh_disp_cfg {
+    uint32_t w, h, dpi, fps, orientation;
+    uint64_t session;
+};
+
+/* Write const.ohspace.display.* into the guest's parameter area. Both sides
+ * (this process here, the guest's GetParameter there) read the same file, so
+ * the session id and the frame geometry stay in lockstep. Never overwrites a
+ * parameter file the runtime package ships on its own. */
+static int write_display_params(const char *rootfs, const struct oh_disp_cfg *c) {
+    char path[300], dir[300];
+    snprintf(dir, sizeof(dir), "%s/system/etc/param", rootfs);
+    snprintf(path, sizeof(path), "%s/ohspace.para", dir);
+    struct stat st;
+    if (stat(path, &st) == 0) return 0;
+    mkdirs_deep(dir);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "# AndroPaw display bridge parameters\n");
+    fprintf(f, "const.ohspace.display.width=%u\n", c->w);
+    fprintf(f, "const.ohspace.display.height=%u\n", c->h);
+    fprintf(f, "const.ohspace.display.dpi=%u\n", c->dpi);
+    fprintf(f, "const.ohspace.display.fps=%u\n", c->fps);
+    fprintf(f, "const.ohspace.display.orientation=%u\n", c->orientation);
+    fprintf(f, "const.ohspace.display.session=%llu\n", (unsigned long long)c->session);
+    fprintf(f, "const.ohspace.display.host_pid=%d\n", (int)getpid());
+    fclose(f);
+    return 0;
+}
+
+static int read_display_params(const char *rootfs, struct oh_disp_cfg *c) {
+    char path[300];
+    snprintf(path, sizeof(path), "%s/system/etc/param/ohspace.para", rootfs);
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char *nl = strpbrk(line, "\r\n");
+        if (nl) *nl = 0;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        const char *key = line, *val = eq + 1;
+        while (*val == ' ') val++;
+        if      (!strcmp(key, "const.ohspace.display.width"))       c->w = (uint32_t)strtoul(val, NULL, 0);
+        else if (!strcmp(key, "const.ohspace.display.height"))      c->h = (uint32_t)strtoul(val, NULL, 0);
+        else if (!strcmp(key, "const.ohspace.display.dpi"))         c->dpi = (uint32_t)strtoul(val, NULL, 0);
+        else if (!strcmp(key, "const.ohspace.display.fps"))         c->fps = (uint32_t)strtoul(val, NULL, 0);
+        else if (!strcmp(key, "const.ohspace.display.orientation")) c->orientation = (uint32_t)strtoul(val, NULL, 0);
+        else if (!strcmp(key, "const.ohspace.display.session"))     c->session = strtoull(val, NULL, 0);
+    }
+    fclose(f);
+    return c->session ? 0 : -1;
+}
+
+static void blit_frame(const uint8_t *src, uint32_t stride, uint32_t w, uint32_t h,
+                       uint8_t *dst, int dst_pitch, int dw, int dh) {
+    if (dw == (int)w && dh == (int)h) {
+        for (uint32_t r = 0; r < h; r++)
+            memcpy(dst + (size_t)r * (size_t)dst_pitch, src + (size_t)r * stride,
+                   (size_t)w * 4);
+        return;
+    }
+    /* nearest-neighbour scale: the guest frame and the window rarely agree */
+    for (int y = 0; y < dh; y++) {
+        uint32_t sy = (uint32_t)(((uint64_t)y * h) / (uint32_t)dh);
+        if (sy >= h) sy = h - 1;
+        const uint8_t *srow = src + (size_t)sy * stride;
+        uint32_t *d = (uint32_t *)(dst + (size_t)y * (size_t)dst_pitch);
+        for (int x = 0; x < dw; x++) {
+            uint32_t sx = (uint32_t)(((uint64_t)x * w) / (uint32_t)dw);
+            if (sx >= w) sx = w - 1;
+            memcpy(&d[x], srow + (size_t)sx * 4, 4);
+        }
+    }
+}
+
+/* FrameRing::Acquire + CopyLatest, per docs/oh-protocol.md §6/§7: the metadata
+ * page holds latest=(seq<<2)|slot and per-slot descriptors (state, pts). A
+ * reader CASes state seq→seq|bit62, copies, then releases the slot back to 0.
+ * Requires a strictly increasing seq so a slow reader never repaints old data. */
+static int ring_acquire_copy(uint8_t *map, uint32_t page, uint64_t ring,
+                             uint32_t stride, uint32_t w, uint32_t h,
+                             uint64_t *last_seq,
+                             uint8_t *dst, int dst_pitch, int dw, int dh) {
+    uint64_t latest = __atomic_load_n((uint64_t *)map, __ATOMIC_ACQUIRE);
+    uint64_t seq = latest >> 2, slot = latest & 3;
+    if (seq == 0 || slot > 2 || seq <= *last_seq) return 0;
+    uint64_t *state = (uint64_t *)(map + 0x40 + 64 * slot);
+    uint64_t cur = __atomic_load_n(state, __ATOMIC_ACQUIRE);
+    if (cur != seq) return 0;
+    uint64_t want = seq | OH_SLOT_STATE_BIT_R;
+    if (!__atomic_compare_exchange_n(state, &cur, want, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return 0;
+    blit_frame(map + page + ring * slot, stride, w, h, dst, dst_pitch, dw, dh);
+    *last_seq = seq;
+    cur = seq;
+    __atomic_compare_exchange_n(state, &cur, 0, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    return 1;
+}
+
+static volatile int g_disp_run = 0;
+static int g_disp_sock = -1;
+static pthread_t g_disp_thread;
+static int g_disp_up = 0;
+
+static void *display_thread_fn(void *arg) {
+    char *rootfs = arg;
+    struct oh_disp_cfg cfg = { 720, 1280, 655, 60, 0, 0 };
+    if (read_display_params(rootfs, &cfg) != 0) {
+        rlog("display bridge: no const.ohspace.display.session in %s — bridge idle", rootfs);
+        free(rootfs);
+        return NULL;
+    }
+    char path[300];
+    snprintf(path, sizeof(path), "%s/ohspace/run/display.sock", rootfs);
+    free(rootfs);
+    if (strlen(path) >= 108) {
+        rlog("display bridge: socket path too long (%zu bytes, unix max 108): %s",
+             strlen(path), path);
+        return NULL;
+    }
+
+    /* the guest's OhspaceDisplayOutput::Start() listens here once init is up */
+    int s = -1;
+    while (!g_stopping && g_disp_run) {
+        s = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        if (s < 0) break;
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+        if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) == 0) break;
+        close(s);
+        s = -1;
+        usleep(500 * 1000);
+    }
+    if (s < 0) {
+        if (!g_stopping) rlog("display bridge: never connected to %s", path);
+        return NULL;
+    }
+    pthread_mutex_lock(&g_lock);
+    g_disp_sock = s;
+    pthread_mutex_unlock(&g_lock);
+    rlog("display bridge: connected to %s", path);
+
+    /* HELLO: {kind=1, len=24, session, pad8=0} */
+    uint8_t hello[24];
+    memset(hello, 0, sizeof(hello));
+    uint32_t k32 = OH_KIND_HELLO, l32 = (uint32_t)sizeof(hello);
+    memcpy(hello + 0, &k32, 4);
+    memcpy(hello + 4, &l32, 4);
+    memcpy(hello + 8, &cfg.session, 8);
+    if (send(s, hello, sizeof(hello), MSG_NOSIGNAL) != (ssize_t)sizeof(hello)) {
+        rlog("display bridge: HELLO failed: %s", strerror(errno));
+        goto out;
+    }
+
+    /* CONFIG: one SEQPACKET packet, fds via SCM_RIGHTS */
+    uint8_t buf[512];
+    struct iovec iov = { buf, sizeof(buf) };
+    union { struct cmsghdr h; char c[256]; } u;
+    struct msghdr mh;
+    memset(&mh, 0, sizeof(mh));
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    mh.msg_control = u.c;
+    mh.msg_controllen = sizeof(u.c);
+    ssize_t n = recvmsg(s, &mh, 0);
+    if (n < 64) {
+        rlog("display bridge: CONFIG too short (%zd bytes): %s", n,
+             n < 0 ? strerror(errno) : "peer closed");
+        goto out;
+    }
+    uint32_t rkind, rlen;
+    uint64_t rsession;
+    memcpy(&rkind, buf + 0, 4);
+    memcpy(&rlen, buf + 4, 4);
+    memcpy(&rsession, buf + 8, 8);
+    if (rkind != OH_KIND_CONFIG || rsession != cfg.session) {
+        rlog("display bridge: unexpected CONFIG (kind=%u session=%llu, want session=%llu)",
+             rkind, (unsigned long long)rsession, (unsigned long long)cfg.session);
+        goto out;
+    }
+
+    int ring_fd = -1, wake_fd = -1;
+    for (struct cmsghdr *cm = CMSG_FIRSTHDR(&mh); cm; cm = CMSG_NXTHDR(&mh, cm)) {
+        if (cm->cmsg_level != SOL_SOCKET || cm->cmsg_type != SCM_RIGHTS) continue;
+        int *fds = (int *)CMSG_DATA(cm);
+        int nf = (int)((cm->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+        for (int i = 0; i < nf; i++) {
+            struct stat fst;
+            /* the ring is a regular sealed memfd; the wake fd is anonymous */
+            if (fstat(fds[i], &fst) == 0 && S_ISREG(fst.st_mode)) {
+                if (ring_fd < 0) ring_fd = fds[i]; else close(fds[i]);
+            } else {
+                if (wake_fd < 0) wake_fd = fds[i]; else close(fds[i]);
+            }
+        }
+    }
+    if (ring_fd < 0 || wake_fd < 0) {
+        rlog("display bridge: CONFIG carried no usable fds (ring=%d wake=%d)", ring_fd, wake_fd);
+        if (ring_fd >= 0) close(ring_fd);
+        if (wake_fd >= 0) close(wake_fd);
+        goto out;
+    }
+
+    /* FrameInfo starts right behind the 16-byte header */
+    uint32_t stride, page;
+    uint64_t ring;
+    memcpy(&stride, buf + 16 + 0x20, 4);
+    memcpy(&page, buf + 16 + 0x24, 4);
+    memcpy(&ring, buf + 16 + 0x28, 8);
+    if (page < 256 || (page & (page - 1)) || ring == 0 || stride < 4 * cfg.w) {
+        rlog("display bridge: bad FrameInfo (stride=%u page=%u ring=%llu)",
+             stride, page, (unsigned long long)ring);
+        close(ring_fd);
+        close(wake_fd);
+        goto out;
+    }
+    size_t total = (size_t)3 * (size_t)ring + page;
+    struct stat rst;
+    if (fstat(ring_fd, &rst) != 0 || (size_t)rst.st_size < total) {
+        rlog("display bridge: memfd too small (%lld < %zu)", (long long)rst.st_size, total);
+        close(ring_fd);
+        close(wake_fd);
+        goto out;
+    }
+#ifdef F_GET_SEALS
+    long seals = fcntl(ring_fd, F_GET_SEALS);
+    if (seals >= 0 && seals != (F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW)) {
+        rlog("display bridge: unexpected memfd seals %#lx — accepting anyway", seals);
+    }
+#endif
+    uint8_t *map = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, ring_fd, 0);
+    close(ring_fd);
+    if (map == MAP_FAILED) {
+        rlog("display bridge: mmap ring failed: %s", strerror(errno));
+        close(wake_fd);
+        goto out;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    ANativeWindow *win = g_window;
+    pthread_mutex_unlock(&g_lock);
+    if (win) ANativeWindow_setBuffersGeometry(win, 0, 0, WINDOW_FORMAT_RGBA_8888);
+    rlog("display bridge: %ux%u @%ufps, ring %llu bytes, stride %u — streaming",
+         cfg.w, cfg.h, cfg.fps, (unsigned long long)ring, stride);
+
+    uint64_t last_seq = 0;
+    while (!g_stopping && g_disp_run) {
+        struct pollfd pfd = { wake_fd, POLLIN, 0 };
+        int pr = poll(&pfd, 1, 1000);
+        if (pr > 0 && (pfd.revents & POLLIN)) {
+            uint64_t v;
+            (void)read(wake_fd, &v, sizeof(v));
+        }
+        if (pr < 0 && errno == EINTR) continue;
+        pthread_mutex_lock(&g_lock);
+        ANativeWindow *w2 = g_window;
+        if (w2) ANativeWindow_acquire(w2);
+        pthread_mutex_unlock(&g_lock);
+        if (!w2) continue;
+        ANativeWindow_Buffer b;
+        if (ANativeWindow_lock(w2, &b, NULL) == 0) {
+            ring_acquire_copy(map, page, ring, stride, cfg.w, cfg.h, &last_seq,
+                              (uint8_t *)b.bits, (int)b.stride * 4, b.width, b.height);
+            ANativeWindow_unlockAndPost(w2);
+        }
+        ANativeWindow_release(w2);
+    }
+    rlog("display bridge: closed");
+    munmap(map, total);
+    close(wake_fd);
+
+out:
+    pthread_mutex_lock(&g_lock);
+    if (g_disp_sock == s) g_disp_sock = -1;
+    pthread_mutex_unlock(&g_lock);
+    close(s);
+    return NULL;
+}
+
+static void display_start(const char *rootfs) {
+    if (g_disp_up) return;
+    g_disp_run = 1;
+    char *arg = strdup(rootfs);
+    if (!arg) { g_disp_run = 0; return; }
+    if (pthread_create(&g_disp_thread, NULL, display_thread_fn, arg) != 0) {
+        free(arg);
+        g_disp_run = 0;
+        return;
+    }
+    g_disp_up = 1;
+}
+
+static void display_stop(void) {
+    if (!g_disp_up) return;
+    g_disp_run = 0;
+    pthread_mutex_lock(&g_lock);
+    if (g_disp_sock >= 0) shutdown(g_disp_sock, SHUT_RDWR);
+    pthread_mutex_unlock(&g_lock);
+    pthread_join(g_disp_thread, NULL);
+    g_disp_up = 0;
+}
+
+/* ---------------------------------------------------- input bridge (touch) */
+
+/*
+ * The guest MMI server (OhspaceInputAdapter in libmmi-server.z.so) also
+ * LISTENS: /ohspace/run/input.sock, same Ohspace::Ui SEQPACKET transport.
+ * HELLO (24B kind 1) makes it open its uinput devices; afterwards the host
+ * streams 216-byte TouchMessages. ValidTouch's pointer-id bitmap check makes
+ * count>1 impossible (ids must be unique yet all equal activeId), so every
+ * message carries exactly one pointer. Coordinates are normalised [0,1];
+ * action uses the Android MotionEvent enum.
+ */
+
+struct oh_touch_msg {
+    uint32_t kind, len;        /* 5, 216 */
+    uint64_t session;
+    uint64_t event_time;       /* +0x10, must be nonzero */
+    uint64_t down_time;        /* +0x18, must be ≥ time */
+    uint64_t time;             /* +0x20 */
+    uint32_t action;           /* +0x28, 0..6 (4 invalid) */
+    uint32_t active_id;        /* +0x2c */
+    uint32_t count;            /* +0x30, ≤ 10 */
+    uint32_t reserved;
+    struct { uint32_t id; float x, y, pressure; } p[10];   /* +0x38 */
+};
+
+static pthread_mutex_t g_input_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_input_sock = -1;
+static volatile int g_input_run = 0;
+static volatile int g_input_ready = 0;
+static uint64_t g_input_session = 0;
+static pthread_t g_input_thread;
+
+static void *input_thread_fn(void *arg) {
+    char *rootfs = arg;
+    struct oh_disp_cfg cfg = { 0, 0, 0, 0, 0, 0 };
+    if (read_display_params(rootfs, &cfg) != 0) {
+        rlog("input bridge: no session parameter — touch disabled");
+        free(rootfs);
+        return NULL;
+    }
+    char path[300];
+    snprintf(path, sizeof(path), "%s/ohspace/run/input.sock", rootfs);
+    free(rootfs);
+    if (strlen(path) >= 108) {
+        rlog("input bridge: socket path too long (%zu bytes)", strlen(path));
+        return NULL;
+    }
+
+    int s = -1;
+    while (!g_stopping && g_input_run) {
+        s = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        if (s < 0) break;
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+        if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) == 0) break;
+        close(s);
+        s = -1;
+        usleep(500 * 1000);
+    }
+    if (s < 0) return NULL;
+
+    uint8_t hello[24];
+    memset(hello, 0, sizeof(hello));
+    uint32_t k32 = OH_KIND_HELLO, l32 = (uint32_t)sizeof(hello);
+    memcpy(hello + 0, &k32, 4);
+    memcpy(hello + 4, &l32, 4);
+    memcpy(hello + 8, &cfg.session, 8);
+    if (send(s, hello, sizeof(hello), MSG_NOSIGNAL) != (ssize_t)sizeof(hello)) {
+        rlog("input bridge: HELLO failed: %s", strerror(errno));
+        close(s);
+        return NULL;
+    }
+    pthread_mutex_lock(&g_input_lock);
+    g_input_sock = s;
+    g_input_session = cfg.session;
+    g_input_ready = 1;
+    pthread_mutex_unlock(&g_input_lock);
+    rlog("input bridge: connected to %s — touch enabled", path);
+
+    while (!g_stopping && g_input_run) usleep(200 * 1000);
+    pthread_mutex_lock(&g_input_lock);
+    g_input_ready = 0;
+    if (g_input_sock == s) g_input_sock = -1;
+    pthread_mutex_unlock(&g_input_lock);
+    close(s);
+    return NULL;
+}
+
+static void input_start(const char *rootfs) {
+    if (g_input_run) return;
+    g_input_run = 1;
+    char *arg = strdup(rootfs);
+    if (!arg) { g_input_run = 0; return; }
+    if (pthread_create(&g_input_thread, NULL, input_thread_fn, arg) != 0) {
+        free(arg);
+        g_input_run = 0;
+    }
+}
+
+static void input_stop(void) {
+    if (!g_input_run) return;
+    g_input_run = 0;
+    pthread_join(g_input_thread, NULL);
+    g_input_ready = 0;
+}
+
 /* ------------------------------------------------------------- guest boot */
 
 /* Locate the musl dynamic loader inside the runtime package. */
@@ -534,6 +968,27 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         host_sock[0] = 0;
     }
 
+    /* 2.5 display bridge parameters: prefer the attached surface's geometry,
+     * within the limits the guest's ValidConfig enforces (w,h ∈ [320,2560],
+     * w*h ≤ 4M, dpi < 120 or ≥ 641, fps ∈ {30,60,90,110,120}). */
+    struct oh_disp_cfg dcfg = { 720, 1280, 655, 60, 0, 0 };
+    if (g_window) {
+        int ww = ANativeWindow_getWidth(g_window);
+        int wh = ANativeWindow_getHeight(g_window);
+        if (ww >= 320 && ww <= 2560 && wh >= 320 && wh <= 2560 &&
+            (long long)ww * wh <= 4LL * 1024 * 1024) {
+            dcfg.w = (uint32_t)ww;
+            dcfg.h = (uint32_t)wh;
+            dcfg.orientation = (wh >= ww) ? 0 : 1;
+        }
+    }
+    dcfg.session = ((uint64_t)time(NULL) * 1000003u + (uint64_t)getpid()) | 1;
+    if (write_display_params(rootfs, &dcfg) == 0)
+        rlog("display parameters: %ux%u @%ufps session %llu",
+             dcfg.w, dcfg.h, dcfg.fps, (unsigned long long)dcfg.session);
+    else
+        rlog("display parameters: could not write ohspace.para (bridge may stay idle)");
+
     /* 3. spawn the guest */
     g_stopping = 0;
     const char *sock = host_sock[0] ? host_sock : "/dev/null";
@@ -556,6 +1011,9 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         return -5;
     }
     g_child = pid;
+    /* 4. bridges: connect to the guest's display.sock / input.sock once they listen */
+    display_start(rootfs);
+    input_start(rootfs);
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseStringUTFChars(env, cfg, json);
     return 0;
@@ -592,6 +1050,8 @@ static jint oh_stop(JNIEnv *env, jclass cls) {
     }
     pthread_mutex_unlock(&g_lock);
     api_stop();
+    display_stop();
+    input_stop();
     if (pid > 0) {
         /* give it a moment, then force */
         for (int i = 0; i < 10; i++) {
@@ -619,9 +1079,49 @@ static jstring oh_version(JNIEnv *env, jclass cls) {
     return (*env)->NewStringUTF(env, g_version);
 }
 
+static inline float clamp01(float v) {
+    if (!(v >= 0.0f)) return 0.0f;   /* also catches NaN */
+    return v > 1.0f ? 1.0f : v;
+}
+
+static jint oh_touch(JNIEnv *env, jclass cls, jint action, jfloat x, jfloat y,
+                     jint pointer_id) {
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_input_lock);
+    int ok = g_input_ready && g_input_sock >= 0 && !g_stopping;
+    if (ok) {
+        struct oh_touch_msg m;
+        memset(&m, 0, sizeof(m));
+        uint64_t now_us = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now_us = (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+        uint32_t act = (uint32_t)action;
+        if (act > 6 || act == 4) act = 3;   /* OUTSIDE never reaches the guest */
+        m.kind = 5;
+        m.len = (uint32_t)sizeof(m);
+        m.session = g_input_session;
+        m.event_time = now_us;
+        m.down_time = now_us;
+        m.time = now_us;
+        m.action = act;
+        m.active_id = (uint32_t)pointer_id;
+        m.count = 1;
+        m.p[0].id = (uint32_t)pointer_id;
+        m.p[0].x = clamp01(x);
+        m.p[0].y = clamp01(y);
+        m.p[0].pressure = 1.0f;
+        ok = send(g_input_sock, &m, sizeof(m), MSG_NOSIGNAL) == (ssize_t)sizeof(m);
+    }
+    pthread_mutex_unlock(&g_input_lock);
+    return ok ? 0 : -1;
+}
+
 static const JNINativeMethod kMethods[] = {
     { "ohStart",   "(Ljava/lang/String;)I",                  (void *)oh_start },
     { "ohSurface", "(Landroid/view/Surface;)I",              (void *)oh_surface },
+    { "ohTouch",   "(IFFI)I",                                (void *)oh_touch },
     { "ohStop",    "()I",                                    (void *)oh_stop },
     { "ohVersion", "()Ljava/lang/String;",                  (void *)oh_version },
 };
