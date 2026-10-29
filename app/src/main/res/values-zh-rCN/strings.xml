@@ -284,6 +284,7 @@
     <string name="oh_download_install">下载并安装</string>
     <string name="oh_downloading">正在下载 %1$s</string>
     <string name="oh_verifying">校验中…</string>
+    <string name="oh_installing">正在解压安装运行时…</string>
     <string name="oh_failed">失败：%1$s</string>
     <string name="oh_retry">重试</string>
     <string name="oh_check_updates">检查更新</string>
