@@ -631,6 +631,114 @@ static void display_stop(void) {
     g_disp_up = 0;
 }
 
+/* ---------------------------------------------------- input bridge (touch) */
+
+/*
+ * The guest MMI server (OhspaceInputAdapter in libmmi-server.z.so) also
+ * LISTENS: /ohspace/run/input.sock, same Ohspace::Ui SEQPACKET transport.
+ * HELLO (24B kind 1) makes it open its uinput devices; afterwards the host
+ * streams 216-byte TouchMessages. ValidTouch's pointer-id bitmap check makes
+ * count>1 impossible (ids must be unique yet all equal activeId), so every
+ * message carries exactly one pointer. Coordinates are normalised [0,1];
+ * action uses the Android MotionEvent enum.
+ */
+
+struct oh_touch_msg {
+    uint32_t kind, len;        /* 5, 216 */
+    uint64_t session;
+    uint64_t event_time;       /* +0x10, must be nonzero */
+    uint64_t down_time;        /* +0x18, must be ≥ time */
+    uint64_t time;             /* +0x20 */
+    uint32_t action;           /* +0x28, 0..6 (4 invalid) */
+    uint32_t active_id;        /* +0x2c */
+    uint32_t count;            /* +0x30, ≤ 10 */
+    uint32_t reserved;
+    struct { uint32_t id; float x, y, pressure; } p[10];   /* +0x38 */
+};
+
+static pthread_mutex_t g_input_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_input_sock = -1;
+static volatile int g_input_run = 0;
+static volatile int g_input_ready = 0;
+static uint64_t g_input_session = 0;
+static pthread_t g_input_thread;
+
+static void *input_thread_fn(void *arg) {
+    char *rootfs = arg;
+    struct oh_disp_cfg cfg = { 0, 0, 0, 0, 0, 0 };
+    if (read_display_params(rootfs, &cfg) != 0) {
+        rlog("input bridge: no session parameter — touch disabled");
+        free(rootfs);
+        return NULL;
+    }
+    char path[300];
+    snprintf(path, sizeof(path), "%s/ohspace/run/input.sock", rootfs);
+    free(rootfs);
+    if (strlen(path) >= 108) {
+        rlog("input bridge: socket path too long (%zu bytes)", strlen(path));
+        return NULL;
+    }
+
+    int s = -1;
+    while (!g_stopping && g_input_run) {
+        s = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+        if (s < 0) break;
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+        if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) == 0) break;
+        close(s);
+        s = -1;
+        usleep(500 * 1000);
+    }
+    if (s < 0) return NULL;
+
+    uint8_t hello[24];
+    memset(hello, 0, sizeof(hello));
+    uint32_t k32 = OH_KIND_HELLO, l32 = (uint32_t)sizeof(hello);
+    memcpy(hello + 0, &k32, 4);
+    memcpy(hello + 4, &l32, 4);
+    memcpy(hello + 8, &cfg.session, 8);
+    if (send(s, hello, sizeof(hello), MSG_NOSIGNAL) != (ssize_t)sizeof(hello)) {
+        rlog("input bridge: HELLO failed: %s", strerror(errno));
+        close(s);
+        return NULL;
+    }
+    pthread_mutex_lock(&g_input_lock);
+    g_input_sock = s;
+    g_input_session = cfg.session;
+    g_input_ready = 1;
+    pthread_mutex_unlock(&g_input_lock);
+    rlog("input bridge: connected to %s — touch enabled", path);
+
+    while (!g_stopping && g_input_run) usleep(200 * 1000);
+    pthread_mutex_lock(&g_input_lock);
+    g_input_ready = 0;
+    if (g_input_sock == s) g_input_sock = -1;
+    pthread_mutex_unlock(&g_input_lock);
+    close(s);
+    return NULL;
+}
+
+static void input_start(const char *rootfs) {
+    if (g_input_run) return;
+    g_input_run = 1;
+    char *arg = strdup(rootfs);
+    if (!arg) { g_input_run = 0; return; }
+    if (pthread_create(&g_input_thread, NULL, input_thread_fn, arg) != 0) {
+        free(arg);
+        g_input_run = 0;
+    }
+}
+
+static void input_stop(void) {
+    if (!g_input_run) return;
+    g_input_run = 0;
+    pthread_join(g_input_thread, NULL);
+    g_input_ready = 0;
+}
+
 /* ------------------------------------------------------------- guest boot */
 
 /* Locate the musl dynamic loader inside the runtime package. */
@@ -903,8 +1011,9 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         return -5;
     }
     g_child = pid;
-    /* 4. display bridge: connect to the guest's display.sock once it listens */
+    /* 4. bridges: connect to the guest's display.sock / input.sock once they listen */
     display_start(rootfs);
+    input_start(rootfs);
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseStringUTFChars(env, cfg, json);
     return 0;
@@ -942,6 +1051,7 @@ static jint oh_stop(JNIEnv *env, jclass cls) {
     pthread_mutex_unlock(&g_lock);
     api_stop();
     display_stop();
+    input_stop();
     if (pid > 0) {
         /* give it a moment, then force */
         for (int i = 0; i < 10; i++) {
@@ -969,9 +1079,49 @@ static jstring oh_version(JNIEnv *env, jclass cls) {
     return (*env)->NewStringUTF(env, g_version);
 }
 
+static inline float clamp01(float v) {
+    if (!(v >= 0.0f)) return 0.0f;   /* also catches NaN */
+    return v > 1.0f ? 1.0f : v;
+}
+
+static jint oh_touch(JNIEnv *env, jclass cls, jint action, jfloat x, jfloat y,
+                     jint pointer_id) {
+    (void)env;
+    (void)cls;
+    pthread_mutex_lock(&g_input_lock);
+    int ok = g_input_ready && g_input_sock >= 0 && !g_stopping;
+    if (ok) {
+        struct oh_touch_msg m;
+        memset(&m, 0, sizeof(m));
+        uint64_t now_us = 0;
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now_us = (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+        uint32_t act = (uint32_t)action;
+        if (act > 6 || act == 4) act = 3;   /* OUTSIDE never reaches the guest */
+        m.kind = 5;
+        m.len = (uint32_t)sizeof(m);
+        m.session = g_input_session;
+        m.event_time = now_us;
+        m.down_time = now_us;
+        m.time = now_us;
+        m.action = act;
+        m.active_id = (uint32_t)pointer_id;
+        m.count = 1;
+        m.p[0].id = (uint32_t)pointer_id;
+        m.p[0].x = clamp01(x);
+        m.p[0].y = clamp01(y);
+        m.p[0].pressure = 1.0f;
+        ok = send(g_input_sock, &m, sizeof(m), MSG_NOSIGNAL) == (ssize_t)sizeof(m);
+    }
+    pthread_mutex_unlock(&g_input_lock);
+    return ok ? 0 : -1;
+}
+
 static const JNINativeMethod kMethods[] = {
     { "ohStart",   "(Ljava/lang/String;)I",                  (void *)oh_start },
     { "ohSurface", "(Landroid/view/Surface;)I",              (void *)oh_surface },
+    { "ohTouch",   "(IFFI)I",                                (void *)oh_touch },
     { "ohStop",    "()I",                                    (void *)oh_stop },
     { "ohVersion", "()Ljava/lang/String;",                  (void *)oh_version },
 };

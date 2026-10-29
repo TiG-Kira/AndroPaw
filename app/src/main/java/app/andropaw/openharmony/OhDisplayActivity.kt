@@ -1,6 +1,7 @@
 package app.andropaw.openharmony
 
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
@@ -83,6 +84,21 @@ private fun OhDisplay(spaceId: String, onBack: () -> Unit) {
                             OhEngine.surface(null)
                         }
                     })
+                    // forward touches into the guest's input channel: the wire enum is
+                    // the Android MotionEvent enum verbatim, coordinates normalised
+                    setOnTouchListener { v, e ->
+                        val idx = e.actionIndex
+                        val action = when (e.actionMasked) {
+                            MotionEvent.ACTION_POINTER_DOWN -> MotionEvent.ACTION_DOWN
+                            MotionEvent.ACTION_POINTER_UP -> MotionEvent.ACTION_UP
+                            MotionEvent.ACTION_OUTSIDE -> MotionEvent.ACTION_CANCEL
+                            else -> e.actionMasked
+                        }
+                        val w = v.width.coerceAtLeast(1)
+                        val ht = v.height.coerceAtLeast(1)
+                        OhEngine.touch(action, e.getX(idx) / w, e.getY(idx) / ht, e.getPointerId(idx))
+                        true
+                    }
                 }
             },
         )
