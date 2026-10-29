@@ -327,12 +327,13 @@ static int find_loader(const char *rootfs, const char *loader_dir,
     return -1;
 }
 
-/* Pick the guest entry binary, preferring a real init. */
+/* Pick the guest entry binary, preferring a real init. A configured path that is
+ * absent must not abort the boot: fall through to the standard locations. */
 static int find_exec(const char *rootfs, const char *exec, char *out, size_t outsz) {
     if (exec && *exec) {
         if (exec[0] == '/') snprintf(out, outsz, "%s%s", rootfs, exec);
         else snprintf(out, outsz, "%s/%s", rootfs, exec);
-        return is_file(out) ? 0 : -1;
+        if (is_file(out)) return 0;
     }
     static const char *cand[] = {
         "/sbin/init", "/bin/init", "/system/bin/init",

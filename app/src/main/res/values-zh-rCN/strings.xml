@@ -293,6 +293,7 @@
     <string name="oh_clean_archives">清理压缩包</string>
     <string name="oh_clean_runtimes">删除运行时</string>
     <string name="oh_spaces">空间</string>
+    <string name="oh_spaces_sub">点击空间即可启动</string>
     <string name="oh_new_space">新建空间</string>
     <string name="oh_spaces_empty">安装运行时后即可创建空间</string>
     <string name="oh_space_default">空间 %1$d</string>

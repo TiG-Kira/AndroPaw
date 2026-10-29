@@ -294,6 +294,7 @@
     <string name="oh_clean_archives">Clear archives</string>
     <string name="oh_clean_runtimes">Remove runtimes</string>
     <string name="oh_spaces">Spaces</string>
+    <string name="oh_spaces_sub">Tap a space to start it</string>
     <string name="oh_new_space">New space</string>
     <string name="oh_spaces_empty">Create a space after installing the runtime</string>
     <string name="oh_space_default">Space %1$d</string>

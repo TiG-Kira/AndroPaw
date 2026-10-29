@@ -103,7 +103,9 @@ object OhEngine {
                 // shipped in the runtime package, pointed at the host-bridge unix socket
                 .put("env", JSONObject()
                     .put("OHRT_ROOT", File(runtimeDir, "rootfs").absolutePath)
-                    .put("OHRT_EXEC", "/sbin/init")
+                    // OpenHarmony rootfs images carry their init as /system/bin/init; the runner
+                    // falls back to the standard locations if a package differs.
+                    .put("OHRT_EXEC", "/system/bin/init")
                     .put("OHRT_LOADER", File(runtimeDir, "lib").absolutePath)
                     .put("OHRT_HOST_API", File(OhSpaceStore.runDir(ctx, space.id), "host.sock").absolutePath))
                 // host bridges over the same unix-socket transports the Android guests use

@@ -1,6 +1,7 @@
 package app.andropaw.openharmony
 
 import android.content.Context
+import android.system.Os
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
@@ -154,10 +155,29 @@ object OhRuntimeRepository {
             while (true) {
                 val e = t.nextTarEntry ?: break
                 if (e.isDirectory) continue
-                val mode = e.mode
-                writeFile(sink(e.name, to)) { out -> t.copyTo(out, 1 shl 16) }
-                // keep the guest's exec bits: the runner and the loader must stay executable
-                runCatching { sink(e.name, to).setExecutable(mode and 0b001_000_000 != 0, false) }
+                val target = sink(e.name, to)
+                when {
+                    // an OpenHarmony rootfs reaches most of /bin and its musl loader through
+                    // symlinks (ld-musl-aarch64.so.1 -> libc.so): writing them out as empty
+                    // files would leave the runtime unable to boot
+                    e.isSymbolicLink -> {
+                        target.delete()
+                        runCatching { Os.symlink(e.linkName, target.absolutePath) }
+                            .onFailure { writeFile(target) { out -> t.copyTo(out, 1 shl 16) } }
+                    }
+                    e.isLink -> {
+                        val src = sink(e.linkName, to)
+                        target.delete()
+                        runCatching { Os.link(src.absolutePath, target.absolutePath) }
+                            .onFailure { writeFile(target) { out -> t.copyTo(out, 1 shl 16) } }
+                    }
+                    else -> {
+                        writeFile(target) { out -> t.copyTo(out, 1 shl 16) }
+                        // keep the guest's own permission bits: init, appspawn and the loader
+                        // must stay executable
+                        runCatching { Os.chmod(target.absolutePath, e.mode) }
+                    }
+                }
             }
         }
     }
