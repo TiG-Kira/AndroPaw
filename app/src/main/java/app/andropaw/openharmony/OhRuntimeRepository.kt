@@ -144,7 +144,8 @@ object OhRuntimeRepository {
      * works under /mnt/sandbox and /dev/pids, and services put their sockets in /run and /var.
      */
     private val rootfsSkeleton = arrayOf(
-        "ohspace/run", "ohspace/etc", "mnt/sandbox", "dev/pts", "dev/pids", "run", "var", "tmp",
+        "ohspace/run", "ohspace/etc", "ohspace/gpu", "mnt/sandbox", "dev/pts", "dev/pids",
+        "run", "var", "tmp",
     )
 
     private fun prepareRootfs(root: File) {

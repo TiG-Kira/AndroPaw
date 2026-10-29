@@ -123,6 +123,12 @@ object OhEngine {
                     .put("sensors", space.settings.shareSensors)
                     .put("clipboard", space.settings.shareClipboard)
                     .put("audio", space.settings.shareAudio))
+                // GPU pass-through (docs/oh-protocol.md §11): the vendor rutabaga
+                // renderer takes the window density; geometry/fps follow the
+                // display bridge parameters computed natively.
+                .put("gpu", JSONObject()
+                    .put("enabled", true)
+                    .put("dpi", ctx.resources.configuration.densityDpi))
 
             runningSpaceId = space.id
             setState(State.BOOTING)

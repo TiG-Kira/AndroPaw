@@ -23,6 +23,7 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fcntl.h>
@@ -739,6 +740,151 @@ static void input_stop(void) {
     g_input_ready = 0;
 }
 
+/* --------------------------------------------------- GPU pass-through (rutabaga) */
+
+/*
+ * The guest's GLES stack (libohspace_gpu_client.so) encodes GL through the
+ * gfxstream guest encoders and writes the byte stream to unix sockets under
+ * /ohspace/gpu (docs/oh-protocol.md §11). The host side is the vendor rutabaga
+ * build: libmmspace_gpu_renderer.so runs a kumquat server + gfxstream backend,
+ * renders on the real GPU and posts into an ANativeWindow. We talk to it
+ * through its plain C++ ABI via dlopen/dlsym — the vendor JNI shell is not
+ * needed. The library ships inside the APK (jniLibs) and is resolved by the
+ * system linker from the app's own native library directory.
+ *
+ * Mmspace::Gpu::Configuration (reverse engineered from Start @0x312d4):
+ *   +0x00 const char* gpuDir   '/'-prefixed host-side socket dir, len < 108;
+ *                              Start() unlinks/chmods <dir>/command.sock there
+ *   +0x08 const char* aux      only checked non-empty; passed through opaquely
+ *   +0x10 u32 width            [320, 2560]
+ *   +0x14 u32 height           [320, 2560], width*height <= 4M
+ *   +0x18 u32 dpi              [120, 640]
+ *   +0x1c u32 fps              one of {30, 60, 90, 120}
+ * Returns 0, or -(EINVAL) on a rejected config / -(EALREADY) when up already.
+ */
+
+struct oh_gpu_cfg {
+    const char *gpu_dir;
+    const char *aux;
+    uint32_t w, h, dpi, fps;
+};
+
+typedef int (*oh_gpu_start_fn)(const struct oh_gpu_cfg *);
+typedef void (*oh_gpu_stop_fn)(void);
+typedef void (*oh_gpu_setwin_fn)(ANativeWindow *, unsigned, unsigned);
+typedef int (*oh_gpu_hasframe_fn)(void);
+typedef int (*oh_gpu_healthy_fn)(void);
+typedef void (*oh_gpu_readerr_fn)(char *, size_t);
+
+static pthread_mutex_t g_gpu_lock = PTHREAD_MUTEX_INITIALIZER;
+static void *g_gpu_dl = NULL;
+static oh_gpu_start_fn g_gpu_start;
+static oh_gpu_stop_fn g_gpu_stop;
+static oh_gpu_setwin_fn g_gpu_setwin;
+static oh_gpu_hasframe_fn g_gpu_hasframe;
+static oh_gpu_healthy_fn g_gpu_healthy;
+static oh_gpu_readerr_fn g_gpu_readerr;
+static volatile int g_gpu_up = 0;
+
+static void *gpu_sym(void *h, const char *mangled) {
+    void *s = dlsym(h, mangled);
+    if (!s) rlog("gpu: dlsym %s failed: %s", mangled, dlerror());
+    return s;
+}
+
+/* Load the vendor rutabaga renderer and resolve the C++ ABI entry points. */
+static int gpu_load(void) {
+    if (g_gpu_dl) return 0;
+    void *h = dlopen("libmmspace_gpu_renderer.so", RTLD_NOW | RTLD_LOCAL);
+    if (!h) {
+        rlog("gpu: libmmspace_gpu_renderer.so not loadable: %s", dlerror());
+        return -1;
+    }
+    g_gpu_start   = (oh_gpu_start_fn)gpu_sym(h, "_ZN7Mmspace3Gpu5StartERKNS0_13ConfigurationE");
+    g_gpu_stop    = (oh_gpu_stop_fn)gpu_sym(h, "_ZN7Mmspace3Gpu4StopEv");
+    g_gpu_setwin  = (oh_gpu_setwin_fn)gpu_sym(h, "_ZN7Mmspace3Gpu9SetWindowEP13ANativeWindowjj");
+    g_gpu_hasframe = (oh_gpu_hasframe_fn)gpu_sym(h, "_ZN7Mmspace3Gpu8HasFrameEv");
+    g_gpu_healthy = (oh_gpu_healthy_fn)gpu_sym(h, "_ZN7Mmspace3Gpu7HealthyEv");
+    g_gpu_readerr = (oh_gpu_readerr_fn)gpu_sym(h, "_ZN7Mmspace3Gpu9ReadErrorEPcm");
+    if (!g_gpu_start || !g_gpu_stop || !g_gpu_setwin) {
+        dlclose(h);
+        g_gpu_dl = NULL;
+        return -1;
+    }
+    g_gpu_dl = h;
+    return 0;
+}
+
+static uint32_t gpu_fps_fix(uint32_t fps) {
+    return (fps == 30 || fps == 60 || fps == 90 || fps == 120) ? fps : 60;
+}
+
+/* Start the rutabaga host side; safe to call when already up. */
+static int gpu_boot(const char *rootfs, uint32_t w, uint32_t h, uint32_t dpi, uint32_t fps) {
+    pthread_mutex_lock(&g_gpu_lock);
+    if (g_gpu_up) { pthread_mutex_unlock(&g_gpu_lock); return 0; }
+    if (gpu_load() != 0) { pthread_mutex_unlock(&g_gpu_lock); return -1; }
+
+    char dir[300];
+    snprintf(dir, sizeof(dir), "%s/ohspace/gpu", rootfs);
+    mkdirs_deep(dir);
+    if (strlen(dir) >= 108) {
+        rlog("gpu: socket dir too long (%zu bytes): %s", strlen(dir), dir);
+        pthread_mutex_unlock(&g_gpu_lock);
+        return -1;
+    }
+    /* keep the guest-facing domain rules in lockstep with the display bridge */
+    if (w < 320 || w > 2560 || h < 320 || h > 2560 ||
+        (uint64_t)w * h > 4ULL * 1024 * 1024) {
+        rlog("gpu: %ux%u outside the vendor domain — pass-through disabled", w, h);
+        pthread_mutex_unlock(&g_gpu_lock);
+        return -1;
+    }
+    if (dpi < 120) dpi = 120;
+    if (dpi > 640) dpi = 640;
+
+    struct oh_gpu_cfg c;
+    memset(&c, 0, sizeof(c));
+    c.gpu_dir = dir;
+    c.aux = dir;          /* opaque to us: vendor only checks it is non-empty */
+    c.w = w;
+    c.h = h;
+    c.dpi = dpi;
+    c.fps = gpu_fps_fix(fps);
+    int rc = g_gpu_start(&c);
+    if (rc != 0) {
+        char err[256] = "";
+        if (g_gpu_readerr) g_gpu_readerr(err, sizeof(err));
+        rlog("gpu: renderer Start() rejected the config (rc=%d)%s%s", rc,
+             err[0] ? ": " : "", err);
+        pthread_mutex_unlock(&g_gpu_lock);
+        return -1;
+    }
+    g_gpu_up = 1;
+    pthread_mutex_unlock(&g_gpu_lock);
+    rlog("gpu: rutabaga up — sockets under %s, %ux%u dpi %u @%ufps", dir, w, h, dpi, c.fps);
+    return 0;
+}
+
+static void gpu_attach_window(ANativeWindow *win) {
+    if (!win) return;
+    pthread_mutex_lock(&g_gpu_lock);
+    if (g_gpu_up && g_gpu_setwin)
+        g_gpu_setwin(win, (unsigned)ANativeWindow_getWidth(win),
+                     (unsigned)ANativeWindow_getHeight(win));
+    pthread_mutex_unlock(&g_gpu_lock);
+}
+
+static void gpu_halt(void) {
+    pthread_mutex_lock(&g_gpu_lock);
+    if (g_gpu_up && g_gpu_stop) {
+        g_gpu_stop();
+        rlog("gpu: renderer stopped");
+    }
+    g_gpu_up = 0;
+    pthread_mutex_unlock(&g_gpu_lock);
+}
+
 /* ------------------------------------------------------------- guest boot */
 
 /* Locate the musl dynamic loader inside the runtime package. */
@@ -989,6 +1135,30 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
     else
         rlog("display parameters: could not write ohspace.para (bridge may stay idle)");
 
+    /* 2.6 GPU pass-through: boot the vendor rutabaga renderer before the guest
+     * so /ohspace/gpu/command.sock and gles.sock are already listening when
+     * the guest's gfxstream client starts connecting. Failure is not fatal —
+     * the guest falls back to its software path. */
+    int gpu_enabled = 1;
+    uint32_t gpu_dpi = dcfg.dpi;
+    {
+        const char *vs2; size_t vl2;
+        if (jfind(json, "gpu", 3, &vs2, &vl2) && vl2 < 256) {
+            char gpu_json[257];
+            memcpy(gpu_json, vs2, vl2);
+            gpu_json[vl2] = 0;
+            char s[32];
+            if (jgetstr(gpu_json, "dpi", s, sizeof(s)) == 0)
+                gpu_dpi = (uint32_t)strtoul(s, NULL, 0);
+            if (jgetstr(gpu_json, "enabled", s, sizeof(s)) == 0 && !strcmp(s, "false"))
+                gpu_enabled = 0;
+        }
+    }
+    if (gpu_enabled)
+        gpu_boot(rootfs, dcfg.w, dcfg.h, gpu_dpi, dcfg.fps);
+    else
+        rlog("gpu: disabled by config");
+
     /* 3. spawn the guest */
     g_stopping = 0;
     const char *sock = host_sock[0] ? host_sock : "/dev/null";
@@ -1031,6 +1201,7 @@ static jint oh_surface(JNIEnv *env, jclass cls, jobject surface) {
         if (g_window) {
             rlog("surface attached %dx%d", ANativeWindow_getWidth(g_window),
                  ANativeWindow_getHeight(g_window));
+            gpu_attach_window(g_window);
         }
     }
     pthread_mutex_unlock(&g_lock);
@@ -1052,6 +1223,7 @@ static jint oh_stop(JNIEnv *env, jclass cls) {
     api_stop();
     display_stop();
     input_stop();
+    gpu_halt();
     if (pid > 0) {
         /* give it a moment, then force */
         for (int i = 0; i < 10; i++) {
