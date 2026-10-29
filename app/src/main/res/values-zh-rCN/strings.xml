@@ -276,4 +276,30 @@
     <string name="m_vnc_stop">停止 VNC 服务器</string>
     <string name="m_vnc_started">VNC：%1$s，密码 %2$s</string>
     <string name="tab_emulator">模拟器</string>
+    <!-- OpenHarmony 空间 -->
+    <string name="oh_title">OpenHarmony</string>
+    <string name="oh_subtitle">在这台手机上轻量运行 OpenHarmony 空间——无需 Root</string>
+    <string name="oh_runtime">运行时</string>
+    <string name="oh_runtime_missing">尚未安装 OpenHarmony 运行时</string>
+    <string name="oh_download_install">下载并安装</string>
+    <string name="oh_downloading">正在下载 %1$s</string>
+    <string name="oh_verifying">校验中…</string>
+    <string name="oh_failed">失败：%1$s</string>
+    <string name="oh_retry">重试</string>
+    <string name="oh_check_updates">检查更新</string>
+    <string name="oh_cache">缓存</string>
+    <string name="oh_cache_usage">缓存 %1$s · 可用 %2$s</string>
+    <string name="oh_clean_partial">清理未完成</string>
+    <string name="oh_clean_archives">清理压缩包</string>
+    <string name="oh_clean_runtimes">删除运行时</string>
+    <string name="oh_spaces">空间</string>
+    <string name="oh_new_space">新建空间</string>
+    <string name="oh_spaces_empty">安装运行时后即可创建空间</string>
+    <string name="oh_space_default">空间 %1$d</string>
+    <string name="oh_boot_preparing">正在准备空间…</string>
+    <string name="oh_boot_booting">正在启动 OpenHarmony…</string>
+    <string name="oh_boot_failed">OpenHarmony 启动失败</string>
+    <string name="oh_settings_row">OpenHarmony 空间</string>
+    <string name="oh_settings_row_sub">下载、安装并运行 OpenHarmony</string>
+    <string name="oh_manage">管理</string>
 </resources>

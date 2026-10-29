@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -229,6 +230,17 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         }
     }
 
+    // OpenHarmony machines share this page: their spaces load here and reload whenever the
+    // page comes back (the user may have installed a runtime or created a space meanwhile)
+    var ohSpaces by remember { mutableStateOf(emptyList<app.andropaw.openharmony.OhSpace>()) }
+    var ohRuntimeInstalled by remember { mutableStateOf(false) }
+    suspend fun refreshOh() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        ohSpaces = app.andropaw.openharmony.OhSpaceStore.list(ctx)
+        ohRuntimeInstalled = app.andropaw.openharmony.OhRuntimeRepository.installed(ctx).isNotEmpty()
+    }
+    LaunchedEffect(Unit) { refreshOh() }
+
+
     // Termux-Ultra floating glass nav-bar placement: the bar is inset 24 dp on both sides and
     // sits on top of the system navigation bars, floored at 12 dp (gesture bars keep their own
     // height, three-button nav its taller inset, and devices without any nav bar still get the
@@ -258,6 +270,17 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     )
 
     val scope = rememberCoroutineScope()
+
+    // reload the OpenHarmony section whenever the page comes back: the user may have installed
+    // a runtime or created a space in the management page since
+    val ohLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(ohLifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) scope.launch { refreshOh() }
+        }
+        ohLifecycle.lifecycle.addObserver(obs)
+        onDispose { ohLifecycle.lifecycle.removeObserver(obs) }
+    }
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
 
@@ -410,6 +433,20 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             running = runningId == img.id,
                             onStart = { VmActivity.start(ctx, img.id) },
                             onMenu = { anchor -> cardMenu = img to anchor },
+                        )
+                    }
+                    // OpenHarmony spaces, managed on the same grid as the Android machines
+                    item(span = full) {
+                        app.andropaw.openharmony.OhHomeCard(
+                            spaces = ohSpaces,
+                            runtimeInstalled = ohRuntimeInstalled,
+                            runningSpaceId = app.andropaw.openharmony.OhEngine.runningSpaceId,
+                            onStartSpace = { id ->
+                                ctx.startActivity(
+                                    Intent(ctx, app.andropaw.openharmony.OhDisplayActivity::class.java)
+                                        .putExtra("space", id))
+                            },
+                            onManage = { ctx.startActivity(Intent(ctx, app.andropaw.openharmony.OhActivity::class.java)) },
                         )
                     }
                 }

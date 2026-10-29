@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -84,6 +85,17 @@ fun SettingsContent(
                     summary = stringResource(R.string.agent_settings_sub),
                     startAction = { Icon(Icons.Rounded.AutoAwesome, null, tint = MiuixTheme.colorScheme.primary) },
                     onClick = { agentSettings = true },
+                )
+            }
+        }
+
+        item {
+            Section(stringResource(R.string.oh_title)) {
+                ArrowPreference(
+                    title = stringResource(R.string.oh_settings_row),
+                    summary = stringResource(R.string.oh_settings_row_sub),
+                    startAction = { Icon(Icons.Rounded.PlayArrow, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { ctx.startActivity(android.content.Intent(ctx, app.andropaw.openharmony.OhActivity::class.java)) },
                 )
             }
         }
