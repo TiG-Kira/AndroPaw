@@ -169,13 +169,47 @@ object OhRuntimeRepository {
         TarArchiveInputStream(raw, 1 shl 16).use { t ->
             while (true) {
                 val e = t.nextTarEntry ?: break
-                if (e.isDirectory) continue
-                val mode = e.mode
-                writeFile(sink(e.name, to)) { out -> t.copyTo(out, 1 shl 16) }
-                // keep the guest's exec bits: the runner and the loader must stay executable
-                runCatching { sink(e.name, to).setExecutable(mode and 0b001_000_000 != 0, false) }
+                when {
+                    e.isDirectory -> {}
+                    // links must never fall through to writeFile: a tar link entry carries no
+                    // data, so writing it would materialise a 0-byte file that shadows the
+                    // real target (e.g. the /bin/init symlink) and breaks the guest boot
+                    e.isSymbolicLink -> writeSymlink(e, to)
+                    e.isLink -> writeHardlink(e, to)
+                    else -> {
+                        val mode = e.mode
+                        writeFile(sink(e.name, to)) { out -> t.copyTo(out, 1 shl 16) }
+                        // keep the guest's exec bits: the runner and the loader must stay executable
+                        runCatching { sink(e.name, to).setExecutable(mode and 0b001_000_000 != 0, false) }
+                    }
+                }
             }
         }
+    }
+
+    /** Materialise a tar symlink. Falls back to copying the target when the filesystem refuses. */
+    private fun writeSymlink(e: TarArchiveEntry, to: File) {
+        val link = sink(e.name, to)
+        runCatching { link.delete() }
+        val target = e.linkName
+        runCatching {
+            java.nio.file.Files.createSymbolicLink(link.toPath(), java.nio.file.Path.of(target))
+        }.onFailure {
+            // sandboxed filesystems may refuse symlinks: copy the pointed-to file instead,
+            // but only for relative targets that stay inside the runtime dir
+            val src = if (target.startsWith("/")) null else runCatching { File(to, target) }.getOrNull()
+            if (src?.isFile == true) src.copyTo(link, overwrite = true)
+        }
+    }
+
+    /** Materialise a tar hard link (both ends live inside the archive). */
+    private fun writeHardlink(e: TarArchiveEntry, to: File) {
+        val link = sink(e.name, to)
+        runCatching { link.delete() }
+        if (e.linkName.startsWith("/")) return
+        val src = File(to, e.linkName)
+        if (src.isFile) runCatching { java.nio.file.Files.createLink(link.toPath(), src.toPath()) }
+            .onFailure { src.copyTo(link, overwrite = true) }
     }
 
     /** zip-slip guard: every entry must land inside the runtime dir. */

@@ -285,6 +285,7 @@
     <string name="oh_download_install">Download &amp; install</string>
     <string name="oh_downloading">Downloading %1$s</string>
     <string name="oh_verifying">Verifying…</string>
+    <string name="oh_installing">Extracting and installing the runtime…</string>
     <string name="oh_failed">Failed: %1$s</string>
     <string name="oh_retry">Retry</string>
     <string name="oh_check_updates">Check for updates</string>
