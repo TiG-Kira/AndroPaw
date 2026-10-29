@@ -125,3 +125,53 @@ seq     --reader CAS--> seq|bit62(0x4000…) --dtor CAS--> 0    // 读完释放
 5. 触摸：第二阶段（MMI/uinput_inject 通道）。
 6. 系统参数注入（安装时写 `system/etc/param/ohspace.para`）：
    `const.ohspace.display.width=...` 等六项 + session（随机 u64）+ host_pid。
+
+## 10. 触摸/输入通道（libmmi-server.z.so `OhspaceInputAdapter` 逆向，2026-10-30）
+
+**guest 的 MMI 服务器也是 LISTEN 方**：`OhspaceInputAdapter::Start()`（0x2fdae0）调
+`Ui::Listen("/ohspace/run/input.sock")`（SOCK_SEQPACKET，同一套 Ohspace::Ui 传输层）。
+宿主 connect 后即可注入触摸与按键。
+
+### 消息流（`Read` 0x2fdf54）
+
+| kind | 方向 | 长度 | 含义 |
+|------|------|------|------|
+| 1 | 宿主→guest | 24 | HELLO：guest 收到后 `OpenDevices()`（创建 "OHSpace Touchscreen" 等 uinput 设备）并回一条 24B kind1 应答；此后才接受触摸 |
+| 5 | 宿主→guest | 216 | TOUCH：Header(16) + TouchMessage(200)，见下 |
+| 6 | 宿主→guest | 24 | KEY → `Key(2)` |
+| 7 | 宿主→guest | 24 | KEY → `Key(1)` |
+
+> kind6/7 的 `Key(1)/Key(2)` 只带常量参数，键码来源未定位（可能语义是
+> press/release 而键码在 24B 载荷 +0x10，或固定键）——键盘注入留待确认，
+> 触摸不受影响。
+
+### `Ohspace::Ui::TouchMessage`（`ValidTouch` 0xfed4 逐字段解出）
+
+```
+0x00  Header(16)   kind=5, len=216, session
+0x10  u64 eventTime    必须 ≠ 0
+0x18  u64 downTime     必须 ≥ [+0x20]
+0x20  u64 time         （与 0x18 组成合法性对）
+0x28  u32 action       ≤ 6，Android MotionEvent 枚举：
+                        0=DOWN 1=UP 2=MOVE 3=CANCEL 4=OUTSIDE(非法)
+                        5=POINTER_DOWN 6=POINTER_UP
+                        action ∈ {0,1,2,5,6} 时要求 count>0 且**所有**
+                        pointer id == activeId；action==3 恒合法
+0x2c  u32 activeId
+0x30  u32 count        ≤ 10
+0x38  pointer[i]       16B/个 × 10（i < count）：
+                        0x00 u32 id        ≤ 31，10 个内不得重复（位图查重）
+                        0x04 f32 x         ∈ [0,1]（归一化），finite
+                        0x08 f32 y         ∈ [0,1]，finite
+                        0x0c f32 pressure  ∈ [0,1]，finite
+```
+
+坐标是**归一化 [0,1]**——宿主把窗口内触摸位置除以窗口宽高即得；guest 侧用
+`const.ohspace.display.width/height` 换算回像素（mmi-server 直接读这两个参数）。
+
+### 宿主实现要点
+
+1. connect 路径：`<rootfs>/ohspace/run/input.sock`
+2. 发 HELLO(24B) → 收 guest 的 24B kind1 应答（在此之前发的触摸会被丢弃）
+3. 每个触摸事件组一条 216B 消息 send（SEQPACKET 单包）；MOVE 高频时每帧一条即可
+4. uinput 设备由 guest 的 `mmi_uinput_service`/`OpenDevices` 管理，宿主不碰 /dev/uinput
