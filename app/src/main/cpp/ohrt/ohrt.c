@@ -44,6 +44,10 @@
 #include <time.h>
 #include <unistd.h>
 
+/* the container's own job list: written over /system/etc/init.cfg when the package's one is
+ * an import line into a directory that is not there (see rootfs_prepare) */
+#include "oh_init_cfg.h"
+
 #define TAG "ohrt"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -1192,8 +1196,55 @@ static void ring_best(char *out, size_t outsz) {
     }
 }
 
+/*
+ * musl's logging is wired into HiLog: every process that prints a log line first connects to
+ * hilogd, and when hilogd is not there the failure is itself printed on stderr — two extra
+ * lines per log line, for every process, forever. A single dead service therefore produced a
+ * wall of "HiLogAdapter_init: Can't connect to server. / Errno: 111" that hid every real
+ * message underneath it. The condition is worth exactly one line, plus a periodic count.
+ */
+static int g_hilog_n = 0;          /* adapter failures seen this boot */
+static int g_hilog_err = 0;        /* the errno the guest reported (0 = not reported yet) */
+static int g_hilog_shown = 0;
+static int g_hilog_pending = 0;    /* an adapter line is waiting for its errno line */
+
+static void hilog_noise(int err) {
+    if (err >= 0) {
+        g_hilog_err = err;
+        if (!g_hilog_shown) {
+            g_hilog_shown = 1;
+            const char *why = err == 2   ? "no socket at all — hilogd never created one"
+                            : err == 111 ? "the socket exists but nothing is listening on it, so "
+                                           "hilogd never started"
+                            : err == 13  ? "permission denied on the hilog socket"
+                                         : "see the guest's own errno";
+            rlog("guest: hilogd is down (errno %d: %s); log lines fall back to stderr and the "
+                 "rest of this noise is counted, not printed", err, why);
+        } else if (g_hilog_n && g_hilog_n % 200 == 0) {
+            rlog("guest: (%d hilog adapter failures so far, still errno %d)", g_hilog_n, g_hilog_err);
+        }
+    } else if (!g_hilog_shown && g_hilog_n >= 40) {
+        g_hilog_shown = 1;
+        rlog("guest: hilogd is down; HiLogAdapter has failed %d times and reports no errno of its "
+             "own — the rest of this noise is counted, not printed", g_hilog_n);
+    }
+    g_hilog_n++;
+}
+
 static void console_line(const char *line) {
     const char *p;
+    /* never ring these: they would push the last real lines out of the death replay */
+    if (strstr(line, "HiLogAdapter")) {
+        g_hilog_pending = 1;
+        hilog_noise(-1);
+        return;
+    }
+    if (g_hilog_pending && !strncmp(line, "Errno:", 6)) {
+        g_hilog_pending = 0;
+        hilog_noise(atoi(line + 6));
+        return;
+    }
+    g_hilog_pending = 0;
     ring_push(line);
     if (!strncmp(line, "OHSPACE_INIT_FAILED", 19)) {
         p = line + 19;
@@ -1272,6 +1323,10 @@ static void console_start(void) {
     g_cat_used = 0;
     g_ring_pos = 0;
     g_ring_len = 0;
+    g_hilog_n = 0;
+    g_hilog_err = 0;
+    g_hilog_shown = 0;
+    g_hilog_pending = 0;
     if (!g_guest_console[0]) return;
     if (pthread_create(&g_console_thread, NULL, console_thread_fn, NULL) == 0) g_console_up = 1;
 }
@@ -1283,6 +1338,164 @@ static void console_finish(void) {
     pthread_join(g_console_thread, NULL);
     g_console_up = 0;
     if (!g_stopping) ring_flush();   /* a stop is not a death: no need to replay its tail */
+}
+
+/* ------------------------------------------------------- rootfs preparation */
+
+/* Read a whole (small) file into buf. Returns the length, or -1. */
+static int read_small(const char *path, char *buf, size_t outsz) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    size_t n = fread(buf, 1, outsz - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return (int)n;
+}
+
+/* Does the first path of init.cfg's "import" list exist inside the rootfs? A cfg that imports
+ * something the package never shipped is worse than no cfg at all: init parses it, finds no
+ * job, and starts nothing while still loading every service file. */
+static int init_import_ok(const char *rootfs, const char *json) {
+    const char *p = strstr(json, "\"import\"");
+    if (!p) return 0;
+    p = strchr(p + 8, '[');
+    if (!p) return 0;
+    p = strchr(p, '"');
+    if (!p) return 0;
+    const char *s = p + 1, *e = strchr(s, '"');
+    if (!e || e == s) return 0;
+    char rel[300], abs[600];
+    size_t n = (size_t)(e - s);
+    if (n >= sizeof(rel)) return 0;
+    memcpy(rel, s, n);
+    rel[n] = 0;
+    if (rel[0] != '/') return 0;
+    snprintf(abs, sizeof(abs), "%s%s", rootfs, rel);
+    return is_file(abs);
+}
+
+/*
+ * The runtime package is a container image, not a bootable system: /ohspace — the per-instance
+ * directory the whole userland keeps its writable state in — is deliberately not in it, and
+ * the package resolves a dozen absolute paths into that directory through symlinks:
+ *
+ *     dev/access_token_id           -> ../ohspace/run/access_token_id
+ *     dev/dec                       -> ../ohspace/run/sandbox_policy
+ *     system/etc/param/ohspace-display.para    -> ../../../ohspace/etc/display.para
+ *     system/etc/param/ohspace-guest-apps.para -> ../../../ohspace/etc/guest-apps.para
+ *     system/etc/param/ohspace-instance.para   -> ../../../ohspace/etc/instance.para
+ *
+ * On the real device those links are dangling until something creates /ohspace — and on this
+ * host nothing does, because the only thing that would (the container's own launcher) is not
+ * part of the app. So init's first job writes the access-token id into a dead link (one
+ * "gettotkenid failed" per service), the sandbox policy copy has no parent, and the param
+ * service dies loading three .para files that are not there — which is where the boot used to
+ * end. Creating the tree and the (empty, and valid) instance files is all it takes, and it has
+ * to happen before init runs, not after.
+ *
+ * The second repair is defensive: a package whose /system/etc/init.cfg imports a job list it
+ * did not ship starts no service at all, and then even hilogd is missing — see oh_init_cfg.h.
+ *
+ * Everything here is idempotent and never fails a boot: a runtime we cannot write to still gets
+ * its chance.
+ */
+static void rootfs_prepare(const char *rootfs) {
+    static const char *dirs[] = {
+        /* the container's own instance root: state, persist parameters, log spool */
+        "ohspace/run", "ohspace/etc", "ohspace/tmp",
+        "ohspace/persist", "ohspace/log", "ohspace/state",
+        /* what its pre-init job mkdirs into; a missing parent makes that mkdir silently fail */
+        "data/local/tmp",           "data/samgr",
+        "data/log/hilog",           "data/service/el0/access_token",
+        "data/service/el1/public",  "data/service/el1/public/for-all-app",
+        "data/service/el1/startup", "data/app/el1/bundle/public",
+        "data/chipset/el1/public/userauth",
+        "data/chipset/el1/public/pinauth",
+        /* init binds the hilog / ipc sockets here instead of creating the directory itself */
+        "dev/unix/socket", "mnt", "tmp",
+    };
+    char path[512];
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        snprintf(path, sizeof(path), "%s/%s", rootfs, dirs[i]);
+        if (is_dir(path)) continue;
+        if (mkdirs_deep(path) == 0) {
+            if (!strncmp(dirs[i], "ohspace/", 8)) rlog("rootfs: created /%s", dirs[i]);
+        } else {
+            rlog("rootfs: cannot create /%s (%s) — its job will fail silently", dirs[i],
+                 strerror(errno));
+        }
+    }
+
+    /* The files those dangling links point at. An empty .para is a valid one (zero
+     * parameters), and an empty access-token blob means "no ids persisted yet" — both are
+     * exactly the state a freshly created instance should be in. */
+    static const char *files[] = {
+        "ohspace/run/access_token_id", "ohspace/run/sandbox_policy",
+        "ohspace/etc/display.para",    "ohspace/etc/guest-apps.para",
+        "ohspace/etc/instance.para",
+    };
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        snprintf(path, sizeof(path), "%s/%s", rootfs, files[i]);
+        if (is_file(path)) { chmod(path, 0666); continue; }
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (fd >= 0) { close(fd); rlog("rootfs: created /%s", files[i]); }
+        else rlog("rootfs: cannot create /%s (%s) — the guest will boot without it", files[i],
+                  strerror(errno));
+    }
+
+    /* ---- defensive: a package that lost the job list its init.cfg imports ---- */
+    char cfg[512], cur[1200];
+    snprintf(cfg, sizeof(cfg), "%s/system/etc/init.cfg", rootfs);
+    int have = read_small(cfg, cur, sizeof(cur)) >= 0;
+    if (have && !init_import_ok(rootfs, cur)) {
+        const char *imp = strstr(cur, "\"import\"");
+        char what[160] = "";
+        if (imp) {
+            snprintf(what, sizeof(what), "%s", imp);
+            char *nl = strchr(what, '\r');
+            if (!nl) nl = strchr(what, '\n');
+            if (nl) *nl = 0;
+        }
+        rlog("rootfs: init.cfg imports %s, which is not in the package — restoring the "
+             "container job list", what[0] ? what : "(nothing)");
+    } else if (!have) {
+        rlog("rootfs: no /system/etc/init.cfg at all — writing the container job list");
+    } else {
+        return;   /* the package's own job list is there: leave it alone */
+    }
+
+    chmod(cfg, 0644);
+    FILE *f = fopen(cfg, "wb");
+    if (!f) {
+        rlog("rootfs: cannot write %s (%s) — init will start no service", cfg, strerror(errno));
+        return;
+    }
+    /* Without ohspace_ipcd in the package, starting it and waiting ten seconds for its socket
+     * only delays the boot: drop those two commands (the service definition can stay, it is
+     * never started). */
+    char ipcd[512];
+    snprintf(ipcd, sizeof(ipcd), "%s/system/bin/ohspace_ipcd", rootfs);
+    int want_ipcd = is_file(ipcd);
+    int dropped = 0;
+    const char *p = OH_INIT_CFG;
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p + 1) : strlen(p);
+        char line[256];
+        size_t m = n < sizeof(line) - 1 ? n : sizeof(line) - 1;
+        memcpy(line, p, m);
+        line[m] = 0;
+        const char *t = line;
+        while (*t == ' ' || *t == '\t') t++;
+        int skip = !want_ipcd && (!strncmp(t, "\"start ohspace_ipcd\"", 20) ||
+                                  !strncmp(t, "\"wait /ohspace/run/ipc.sock", 27));
+        if (skip) dropped++;
+        else fwrite(p, 1, n, f);
+        p += n;
+    }
+    fclose(f);
+    rlog("rootfs: boot jobs restored (hilogd, samgr, param_watcher, framework)%s",
+         dropped ? " — ohspace_ipcd is not in the package, its start/wait was dropped" : "");
 }
 
 /* ------------------------------------------------------------- guest boot */
@@ -1526,6 +1739,10 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         (*env)->ReleaseStringUTFChars(env, cfg, json);
         return -2;
     }
+    /* 1.5 the package is a container build: restore the boot jobs it references but does not
+     * ship, and the directories those jobs create into */
+    rootfs_prepare(rootfs);
+
     char exec_abs[400], loader_abs[400], exec_guest[400];
     if (find_exec(rootfs, exec_rel[0] ? exec_rel : NULL, exec_abs, sizeof(exec_abs)) != 0) {
         rlog("boot failed: no guest init found under %s (looked for /sbin/init, /bin/init, /system/bin/init)",
