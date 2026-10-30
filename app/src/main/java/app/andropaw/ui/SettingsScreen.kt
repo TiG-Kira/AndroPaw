@@ -58,6 +58,7 @@ fun SettingsContent(
     onRestyle: () -> Unit,
     padding: PaddingValues,
     onAbout: () -> Unit = {},
+    onOhDeploy: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var langDialog by remember { mutableStateOf(false) }
@@ -92,10 +93,10 @@ fun SettingsContent(
         item {
             Section(stringResource(R.string.oh_title)) {
                 ArrowPreference(
-                    title = stringResource(R.string.oh_settings_row),
-                    summary = stringResource(R.string.oh_settings_row_sub),
+                    title = stringResource(R.string.oh_manage_deploy),
+                    summary = stringResource(R.string.oh_manage_deploy_sub),
                     startAction = { Icon(Icons.Rounded.PlayArrow, null, tint = MiuixTheme.colorScheme.primary) },
-                    onClick = { ctx.startActivity(android.content.Intent(ctx, app.andropaw.openharmony.OhActivity::class.java)) },
+                    onClick = onOhDeploy,
                 )
             }
         }

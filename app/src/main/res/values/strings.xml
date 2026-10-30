@@ -294,14 +294,19 @@
     <string name="oh_clean_partial">Clear partial</string>
     <string name="oh_clean_archives">Clear archives</string>
     <string name="oh_clean_runtimes">Remove runtimes</string>
-    <string name="oh_spaces">Spaces</string>
-    <string name="oh_new_space">New space</string>
-    <string name="oh_spaces_empty">Create a space after installing the runtime</string>
-    <string name="oh_space_default">Space %1$d</string>
     <string name="oh_boot_preparing">Preparing the space…</string>
     <string name="oh_boot_booting">Starting OpenHarmony…</string>
     <string name="oh_boot_failed">OpenHarmony failed to start</string>
-    <string name="oh_settings_row">OpenHarmony spaces</string>
-    <string name="oh_settings_row_sub">Download, install and run OpenHarmony</string>
-    <string name="oh_manage">Manage</string>
+    <!-- OpenHarmony: the machine on the emulator page and the settings entry -->
+    <string name="oh_manage_deploy">Manage the OpenHarmony deployment</string>
+    <string name="oh_manage_deploy_sub">Fetch the runtime package and unpack it</string>
+    <string name="oh_deploy_title">OpenHarmony deployment</string>
+    <string name="oh_deploy_sub">The runtime is what every OpenHarmony machine boots from. Spaces are created on the emulator page, like any other machine.</string>
+    <string name="oh_machine_row">OpenHarmony machine</string>
+    <string name="oh_machine_ready">OpenHarmony %1$s — ready to create</string>
+    <string name="oh_machine_default">OpenHarmony %1$d</string>
+    <string name="oh_boot_count">%1$d boots</string>
+    <!-- "New machine": one sheet for both kinds of machine -->
+    <string name="new_machine_sub">OpenHarmony, or a machine from an imported firmware</string>
+    <string name="new_emulator">New emulator</string>
 </resources>

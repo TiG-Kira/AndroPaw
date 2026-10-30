@@ -293,14 +293,19 @@
     <string name="oh_clean_partial">清理未完成</string>
     <string name="oh_clean_archives">清理压缩包</string>
     <string name="oh_clean_runtimes">删除运行时</string>
-    <string name="oh_spaces">空间</string>
-    <string name="oh_new_space">新建空间</string>
-    <string name="oh_spaces_empty">安装运行时后即可创建空间</string>
-    <string name="oh_space_default">空间 %1$d</string>
     <string name="oh_boot_preparing">正在准备空间…</string>
     <string name="oh_boot_booting">正在启动 OpenHarmony…</string>
     <string name="oh_boot_failed">OpenHarmony 启动失败</string>
-    <string name="oh_settings_row">OpenHarmony 空间</string>
-    <string name="oh_settings_row_sub">下载、安装并运行 OpenHarmony</string>
-    <string name="oh_manage">管理</string>
+    <!-- OpenHarmony：模拟器页上的机器与设置入口 -->
+    <string name="oh_manage_deploy">管理 OpenHarmony 部署</string>
+    <string name="oh_manage_deploy_sub">下载运行时包并解压安装</string>
+    <string name="oh_deploy_title">OpenHarmony 部署</string>
+    <string name="oh_deploy_sub">运行时是所有 OpenHarmony 机器的启动来源；空间在模拟器页创建，与其它机器一样。</string>
+    <string name="oh_machine_row">OpenHarmony 模拟器</string>
+    <string name="oh_machine_ready">OpenHarmony %1$s — 可创建</string>
+    <string name="oh_machine_default">OpenHarmony %1$d</string>
+    <string name="oh_boot_count">启动 %1$d 次</string>
+    <!-- 「新建模拟器」：两种机器共用一个列表 -->
+    <string name="new_machine_sub">OpenHarmony，或由已导入固件创建的模拟器</string>
+    <string name="new_emulator">新建模拟器</string>
 </resources>

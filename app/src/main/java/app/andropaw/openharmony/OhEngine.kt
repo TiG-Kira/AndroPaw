@@ -18,9 +18,26 @@ import java.util.concurrent.CopyOnWriteArrayList
  * The runner library is resolved from the *runtime directory* first (a "lib" entry named by
  * engine.json), falling back to AndroPaw's built-in libohrt.so — so runtime packages can evolve
  * independently of AndroPaw releases, and the app boots OpenHarmony out of the box.
+ *
+ * Everything the guest does reaches the UI through [nativeEvent]: log lines, the display and
+ * input bridges coming up, the first frame, and — the one that used to be invisible — the guest
+ * process dying. Without it a space that never booted looked exactly like one that was only
+ * slow: a black screen either way.
  */
 object OhEngine {
     enum class State { STOPPED, PREPARING, BOOTING, RUNNING, FAILED }
+
+    /** Events libohrt reports back (see the type constants in ohrt.c). */
+    private const val EV_LOG = 1
+    private const val EV_DISPLAY_UP = 2
+    private const val EV_FIRST_FRAME = 3
+    private const val EV_GUEST_EXIT = 4
+    private const val EV_INPUT_UP = 5
+    private const val EV_GPU_UP = 6
+
+    /** Input kinds the guest's MMI server understands on input.sock (docs/oh-protocol.md §10). */
+    const val KEY_BACK = 6
+    const val KEY_HOME = 7
 
     class OhException(message: String) : Exception(message)
 
@@ -29,6 +46,8 @@ object OhEngine {
         external fun ohStart(configJson: String): Int
         external fun ohSurface(surface: Surface?): Int
         external fun ohTouch(action: Int, x: Float, y: Float, pointerId: Int): Int
+        external fun ohKey(kind: Int): Int
+        external fun ohFrames(): Long
         external fun ohStop(): Int
         external fun ohVersion(): String
     }
@@ -39,17 +58,106 @@ object OhEngine {
         private set
     @Volatile var runningSpaceId: String? = null
         private set
+    /** when this run started, for the boot counter on the operating page */
+    @Volatile var bootAt = 0L
+        private set
 
     private val native = OhNative()
     private var libLoaded = false
     private val listeners = CopyOnWriteArrayList<(State) -> Unit>()
     private val logListeners = CopyOnWriteArrayList<(String) -> Unit>()
+    private val lines = ArrayList<String>()
+    private val linesLock = Any()
+    /** the surface the page has handed over; kept so a boot that starts later still gets one */
+    @Volatile var pendingSurface: Surface? = null
+        private set
 
     fun onState(l: (State) -> Unit): () -> Unit { listeners.add(l); return { listeners.remove(l) } }
     fun onLog(l: (String) -> Unit): () -> Unit { logListeners.add(l); return { logListeners.remove(l) } }
 
-    private fun setState(s: State) { state = s; listeners.forEach { runCatching { it(s) } } }
-    private fun log(s: String) { logListeners.forEach { runCatching { it(s) } } }
+    /** the app context of the running space, for the home page's "running" marker */
+    @Volatile private var hostCtx: android.content.Context? = null
+    @Volatile private var beatThread: Thread? = null
+
+    private fun setState(s: State) {
+        state = s
+        publish(s)
+        listeners.forEach { runCatching { it(s) } }
+    }
+
+    /**
+     * The home page watches one file for "which machine is up" (core/VmSession). The runner's
+     * own state changes are what it is told, and a beat every few seconds keeps it from
+     * expiring — without one the marker goes stale and the card stops showing as running.
+     */
+    private fun publish(s: State) {
+        val c = hostCtx ?: return
+        val id = runningSpaceId
+        runCatching {
+            if (id == null || s == State.STOPPED) app.andropaw.core.VmSession.clear(c)
+            else app.andropaw.core.VmSession.publish(c, id, s.name)
+        }
+    }
+
+    private fun startBeat() {
+        if (beatThread != null) return
+        beatThread = Thread({
+            while (state != State.STOPPED) {
+                hostCtx?.let { runCatching { app.andropaw.core.VmSession.beat(it) } }
+                runCatching { Thread.sleep(3000) }
+            }
+            beatThread = null
+        }, "oh-beat").apply { isDaemon = true; start() }
+    }
+
+    /** A line from anywhere in this run: the Java side, or the runner through [nativeEvent]. */
+    private fun addLine(s: String) {
+        synchronized(linesLock) {
+            lines.add(s)
+            if (lines.size > 400) lines.subList(0, lines.size - 400).clear()
+        }
+        logListeners.forEach { runCatching { it(s) } }
+    }
+
+    fun log(s: String) = addLine("${stamp()} $s")
+
+    private fun stamp(): String {
+        val t = java.util.Calendar.getInstance()
+        return String.format(java.util.Locale.US, "%02d:%02d:%02d", t.get(java.util.Calendar.HOUR_OF_DAY),
+            t.get(java.util.Calendar.MINUTE), t.get(java.util.Calendar.SECOND))
+    }
+
+    fun lines(): List<String> = synchronized(linesLock) { lines.toList() }
+
+    /**
+     * Called by libohrt (any thread). Log lines land in the panel the operating page shows; the
+     * rest move the state machine, which is how a guest that died on the first job stops looking
+     * like a guest that is merely still booting.
+     */
+    @JvmStatic
+    fun nativeEvent(type: Int, arg: Long, msg: String?) {
+        when (type) {
+            EV_LOG -> addLine(msg ?: return)
+            EV_DISPLAY_UP -> {
+                addLine("${stamp()} display: bridge connected — the guest's composer is publishing frames")
+                if (state == State.BOOTING || state == State.PREPARING) setState(State.RUNNING)
+            }
+            EV_FIRST_FRAME -> {
+                addLine("${stamp()} display: first frame on screen")
+                if (state != State.RUNNING) setState(State.RUNNING)
+            }
+            EV_GUEST_EXIT -> {
+                val what = if (arg > 0 && arg and 0x7f != 0L) "killed by signal ${arg and 0x7f}"
+                    else "exited with code ${(arg shr 8) and 0xff}"
+                failure = "the OpenHarmony guest ${what}"
+                addLine("${stamp()} ✖ guest ${what} — the space stopped")
+                setState(State.FAILED)
+            }
+            EV_INPUT_UP -> addLine("${stamp()} input: bridge connected — touch and keys enabled")
+            EV_GPU_UP -> addLine(if (arg != 0L) "${stamp()} gpu: pass-through up"
+                else "${stamp()} gpu: pass-through unavailable, the guest falls back to software")
+        }
+    }
 
     private fun loadRuntimeLib(runtimeDir: File, libName: String) {
         if (libLoaded) return
@@ -80,7 +188,11 @@ object OhEngine {
             stop()
         }
         failure = null
+        bootAt = System.currentTimeMillis()
+        hostCtx = ctx
         setState(State.PREPARING)
+        startBeat()
+        if (surface != null) pendingSurface = surface
         try {
             val manifest = File(runtimeDir, "runtime.json")
             if (!manifest.isFile) throw OhException("runtime ${runtimeDir.name} is not installed")
@@ -135,10 +247,20 @@ object OhEngine {
             setState(State.BOOTING)
             log("boot: runtime ${runtimeDir.name}, openharmony $ohVersion, space ${space.id}")
             log("launcher: ${runner?.name ?: "musl loader (no libaemu64 — the guest will see the host's paths)"}")
-            surface?.let { native.ohSurface(it) }
+            pendingSurface?.let { native.ohSurface(it) }
             val rc = native.ohStart(cfg.toString())
-            if (rc != 0) throw OhException("runner rejected the config (rc=$rc)")
-            setState(State.RUNNING)
+            if (rc != 0) {
+                // the runner writes its own diagnosis to runner.log; surface the tail so the
+                // failure dialog says "no guest init found under …" instead of a bare rc=-3
+                val tail = runCatching {
+                    File(OhSpaceStore.runDir(ctx, space.id), "runner.log")
+                        .readLines().takeLast(5).joinToString("\n")
+                }.getOrDefault("")
+                throw OhException(
+                    "runner rejected the config (rc=$rc)" +
+                        if (tail.isBlank()) "" else "\n$tail",
+                )
+            }
             OhSpaceStore.update(ctx, space.id) {
                 it.copy(lastBootMs = System.currentTimeMillis(), bootCount = it.bootCount + 1)
             }
@@ -167,6 +289,7 @@ object OhEngine {
     /** Attach the display surface of the current run (called from the activity's SurfaceView). */
     @Synchronized
     fun surface(surface: Surface?) {
+        pendingSurface = surface
         if (state == State.RUNNING || state == State.BOOTING) {
             runCatching { native.ohSurface(surface) }
         }
@@ -178,14 +301,26 @@ object OhEngine {
      * [x]/[y] are normalised to the view size, [pointerId] the Android pointer id.
      */
     fun touch(action: Int, x: Float, y: Float, pointerId: Int) {
-        if (state == State.RUNNING) runCatching { native.ohTouch(action, x, y, pointerId) }
+        if (state == State.RUNNING || state == State.BOOTING) runCatching { native.ohTouch(action, x, y, pointerId) }
     }
+
+    /**
+     * A navigation key. The guest's MMI server synthesises a full press (down+up) per message
+     * and knows exactly two of them — back and home — so there is nothing else to send.
+     */
+    fun key(kind: Int): Boolean =
+        runCatching { native.ohKey(kind) == 0 }.getOrDefault(false)
+
+    /** Frames the display bridge has put on the screen; 0 means the screen is still empty. */
+    fun frames(): Long = runCatching { native.ohFrames() }.getOrDefault(0L)
 
     @Synchronized
     fun stop() {
         if (state == State.STOPPED) return
         runCatching { native.ohStop() }
         runningSpaceId = null
+        bootAt = 0
+        hostCtx = null
         setState(State.STOPPED)
     }
 }

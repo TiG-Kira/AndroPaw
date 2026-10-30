@@ -69,6 +69,20 @@ object OhSpaceStore {
         get(ctx, id)?.let { save(ctx, f(it)) }
     }
 
+    fun rename(ctx: Context, id: String, name: String) = update(ctx, id) { it.copy(name = name) }
+
+    /**
+     * Drop the space's writable data and start it over: the overlay the guest wrote into during
+     * its boots. The space itself — its name, its settings, its boot counters — stays.
+     */
+    fun resetData(ctx: Context, id: String) {
+        val d = dataDir(ctx, id)
+        if (d.isDirectory) d.listFiles()?.forEach { ImageWipe.wipe(it) }
+    }
+
+    /** Bytes the space's data takes on the host, for its card on the emulator page. */
+    fun dataBytes(ctx: Context, id: String): Long = OhCache.du(spaceDir(ctx, id))
+
     /** Deletes the space directory tree without following symlinks out. */
     fun delete(ctx: Context, id: String): Boolean {
         val d = File(spacesDir(ctx), id)
