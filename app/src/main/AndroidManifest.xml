@@ -76,20 +76,6 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
-            android:name=".openharmony.OhActivity"
-            android:exported="false"
-            android:label="@string/oh_title"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".openharmony.OhDisplayActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation"
-            android:exported="false"
-            android:launchMode="singleTask"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.AndroPaw.Vm" />
-
-        <activity
             android:name=".ui.VmActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|navigation"
             android:exported="false"

@@ -50,6 +50,40 @@
 
 /* ------------------------------------------------------------------ state */
 
+/* ------------------------------------------------------- host -> java events */
+
+/*
+ * Everything this runner learns goes back to Java through one static callback:
+ * OhEngine.nativeEvent(type, arg, msg). The log lines alone turn a black screen into a
+ * diagnosis; EV_GUEST_EXIT is the one that used to be missing entirely — a guest init that
+ * died in its first job left the app showing a machine that was "still booting" forever.
+ */
+#define EV_LOG          1
+#define EV_DISPLAY_UP   2
+#define EV_FIRST_FRAME  3
+#define EV_GUEST_EXIT   4
+#define EV_INPUT_UP     5
+#define EV_GPU_UP       6
+
+static JavaVM *g_vm = NULL;
+static jclass g_cb_cls = NULL;
+static jmethodID g_cb_method = NULL;
+
+static void oh_event(int type, long arg, const char *msg) {
+    if (!g_vm || !g_cb_method) return;
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, &env, NULL) != JNI_OK || env == NULL) return;
+        attached = 1;
+    }
+    jstring s = msg ? (*env)->NewStringUTF(env, msg) : NULL;
+    (*env)->CallStaticVoidMethod(env, g_cb_cls, g_cb_method, (jint)type, (jlong)arg, s);
+    if (s) (*env)->DeleteLocalRef(env, s);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (attached) (*g_vm)->DetachCurrentThread(g_vm);
+}
+
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t g_child = 0;              /* guest process group */
 static volatile int g_stopping = 0;
@@ -79,6 +113,7 @@ static void rlog(const char *fmt, ...) {
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
     LOGI("%s", msg);
+    oh_event(EV_LOG, 0, msg);
     if (g_log_path[0]) {
         int fd = open(g_log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
         if (fd >= 0) {
@@ -202,6 +237,22 @@ static int jgetstr(const char *obj, const char *key, char *out, size_t outsz) {
     if (vl < 2 || vs[0] != '"') return -1;
     p = jstr(vs, out, outsz);
     return p ? 0 : -1;
+}
+
+/* Same as jgetstr for the machine-generated numbers (width, height, fps, density…):
+ * accepts both a quoted and a bare number. */
+static int jgetuint(const char *obj, const char *key, uint32_t *out) {
+    const char *vs;
+    size_t vl;
+    if (!jfind(obj, key, strlen(key), &vs, &vl)) return -1;
+    if (vs[0] == '"') {
+        char tmp[64];
+        if (!jstr(vs, tmp, sizeof(tmp))) return -1;
+        *out = (uint32_t)strtoul(tmp, NULL, 0);
+        return 0;
+    }
+    *out = (uint32_t)strtoul(vs, NULL, 0);
+    return 0;
 }
 
 /* ------------------------------------------------------------ fs helpers */
@@ -331,20 +382,82 @@ struct oh_disp_cfg {
     uint64_t session;
 };
 
-/* Write const.ohspace.display.* into the guest's parameter area. Both sides
- * (this process here, the guest's GetParameter there) read the same file, so
- * the session id and the frame geometry stay in lockstep. Never overwrites a
- * parameter file the runtime package ships on its own. */
+/* The seven parameters AndroPaw owns in the guest's area. Every boot rewrites them — the
+ * session in particular, which must match on both ends of the display socket or the guest
+ * refuses the HELLO — while any line the runtime package shipped on its own is preserved. */
+static const char *k_owned[] = {
+    "const.ohspace.display.width", "const.ohspace.display.height", "const.ohspace.display.dpi",
+    "const.ohspace.display.fps", "const.ohspace.display.orientation",
+    "const.ohspace.display.session", "const.ohspace.display.host_pid",
+};
+
+static int owned_key(const char *key) {
+    for (size_t i = 0; i < sizeof(k_owned) / sizeof(k_owned[0]); i++)
+        if (!strcmp(key, k_owned[i])) return 1;
+    return 0;
+}
+
+/*
+ * The package ships /system/etc/param/ohspace.para as a *symlink* (e.g.
+ * ../ohspace/system.para) so the guest reads our values through
+ * /system/etc/param/ohspace.para. Doing all I/O through that symlink requires
+ * the lnk_file read permission, which some SELinux policies deny untrusted_app
+ * — and that denial used to leave the display & input bridges without a session
+ * (const.ohspace.display.session), so the screen stayed black. Resolve to the
+ * real file once and read/write there instead.
+ */
+static void mkdirs_parent(const char *path) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    char *slash = strrchr(tmp, '/');
+    if (slash) { *slash = 0; mkdirs(tmp); }
+}
+
+static int ohspace_para_path(const char *rootfs, char *out, size_t outsz) {
+    char sym[300];
+    snprintf(sym, sizeof(sym), "%s/system/etc/param/ohspace.para", rootfs);
+    char *rp = realpath(sym, NULL);
+    if (rp) {
+        snprintf(out, outsz, "%s", rp);
+        free(rp);
+    } else {
+        /* package convention: param/ohspace.para -> ../ohspace/system.para */
+        snprintf(out, outsz, "%s/system/etc/ohspace/system.para", rootfs);
+    }
+    return 0;
+}
+
 static int write_display_params(const char *rootfs, const struct oh_disp_cfg *c) {
-    char path[300], dir[300];
+    char dir[300], sym_path[300], path[300];
     snprintf(dir, sizeof(dir), "%s/system/etc/param", rootfs);
-    snprintf(path, sizeof(path), "%s/ohspace.para", dir);
-    struct stat st;
-    if (stat(path, &st) == 0) return 0;
+    snprintf(sym_path, sizeof(sym_path), "%s/ohspace.para", dir);
     mkdirs_deep(dir);
+    ohspace_para_path(rootfs, path, sizeof(path));
+    mkdirs_parent(path);
+
+    /* keep whatever else the package put here: copy every line we do not own */
+    char keep[64][256];
+    int kept = 0;
+    FILE *in = fopen(path, "r");
+    if (in) {
+        char line[256];
+        while (fgets(line, sizeof(line), in) && kept < (int)(sizeof(keep) / sizeof(keep[0]))) {
+            char *nl = strpbrk(line, "\r\n");
+            if (nl) *nl = 0;
+            char *eq = strchr(line, '=');
+            if (!eq) { snprintf(keep[kept++], sizeof(keep[0]), "%s", line); continue; }
+            *eq = 0;                        /* line is the key now */
+            if (owned_key(line)) continue;  /* dropped: rewritten below with this run's values */
+            snprintf(keep[kept++], sizeof(keep[0]), "%s=%s", line, eq + 1);
+        }
+        fclose(in);
+    }
+
     FILE *f = fopen(path, "w");
+    if (!f) f = fopen(sym_path, "w");
     if (!f) return -1;
     fprintf(f, "# AndroPaw display bridge parameters\n");
+    for (int i = 0; i < kept; i++) fprintf(f, "%s\n", keep[i]);
     fprintf(f, "const.ohspace.display.width=%u\n", c->w);
     fprintf(f, "const.ohspace.display.height=%u\n", c->h);
     fprintf(f, "const.ohspace.display.dpi=%u\n", c->dpi);
@@ -357,9 +470,11 @@ static int write_display_params(const char *rootfs, const struct oh_disp_cfg *c)
 }
 
 static int read_display_params(const char *rootfs, struct oh_disp_cfg *c) {
-    char path[300];
-    snprintf(path, sizeof(path), "%s/system/etc/param/ohspace.para", rootfs);
+    char path[300], sym_path[300];
+    snprintf(sym_path, sizeof(sym_path), "%s/system/etc/param/ohspace.para", rootfs);
+    ohspace_para_path(rootfs, path, sizeof(path));
     FILE *f = fopen(path, "r");
+    if (!f) f = fopen(sym_path, "r");
     if (!f) return -1;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
@@ -431,6 +546,8 @@ static volatile int g_disp_run = 0;
 static int g_disp_sock = -1;
 static pthread_t g_disp_thread;
 static int g_disp_up = 0;
+/** frames the bridge has actually put on the window: 0 means the screen never showed anything */
+static long long g_frames = 0;
 
 static void *display_thread_fn(void *arg) {
     char *rootfs = arg;
@@ -471,6 +588,7 @@ static void *display_thread_fn(void *arg) {
     g_disp_sock = s;
     pthread_mutex_unlock(&g_lock);
     rlog("display bridge: connected to %s", path);
+    oh_event(EV_DISPLAY_UP, 0, NULL);
 
     /* HELLO: {kind=1, len=24, session, pad8=0} */
     uint8_t hello[24];
@@ -591,9 +709,13 @@ static void *display_thread_fn(void *arg) {
         if (!w2) continue;
         ANativeWindow_Buffer b;
         if (ANativeWindow_lock(w2, &b, NULL) == 0) {
-            ring_acquire_copy(map, page, ring, stride, cfg.w, cfg.h, &last_seq,
-                              (uint8_t *)b.bits, (int)b.stride * 4, b.width, b.height);
+            int got = ring_acquire_copy(map, page, ring, stride, cfg.w, cfg.h, &last_seq,
+                                        (uint8_t *)b.bits, (int)b.stride * 4, b.width, b.height);
             ANativeWindow_unlockAndPost(w2);
+            if (got) {
+                long long f = __atomic_add_fetch(&g_frames, 1, __ATOMIC_RELAXED);
+                if (f == 1) { rlog("display bridge: first frame on screen"); oh_event(EV_FIRST_FRAME, 0, NULL); }
+            }
         }
         ANativeWindow_release(w2);
     }
@@ -885,6 +1007,42 @@ static void gpu_halt(void) {
     pthread_mutex_unlock(&g_gpu_lock);
 }
 
+/* ------------------------------------------------------- guest supervisor */
+
+/*
+ * Somebody has to reap the guest. Without a waiter its death went unnoticed: an init that
+ * died in its first job left the app showing a machine that was "still booting", and the
+ * screen stayed black with nothing anywhere saying why. The supervisor reports the exit.
+ */
+static pthread_t g_wait_thread;
+static int g_wait_up = 0;
+
+static void *wait_thread_fn(void *arg) {
+    (void)arg;
+    pid_t pid = g_child;
+    int status = 0;
+    pid_t r;
+    do { r = waitpid(pid, &status, 0); } while (r < 0 && errno == EINTR);
+    if (g_stopping) return NULL;
+    if (r == pid) {
+        if (WIFSIGNALED(status)) rlog("guest %d killed by signal %d", (int)pid, WTERMSIG(status));
+        else rlog("guest %d exited with code %d", (int)pid, WEXITSTATUS(status));
+        oh_event(EV_GUEST_EXIT, (long)status, NULL);
+    }
+    return NULL;
+}
+
+static void wait_start(void) {
+    if (g_wait_up) return;
+    if (pthread_create(&g_wait_thread, NULL, wait_thread_fn, NULL) == 0) g_wait_up = 1;
+}
+
+static void wait_stop(void) {
+    if (!g_wait_up) return;
+    pthread_join(g_wait_thread, NULL);
+    g_wait_up = 0;
+}
+
 /* ------------------------------------------------------------- guest boot */
 
 /* Locate the musl dynamic loader inside the runtime package. */
@@ -1117,20 +1275,42 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         host_sock[0] = 0;
     }
 
-    /* 2.5 display bridge parameters: prefer the attached surface's geometry,
-     * within the limits the guest's ValidConfig enforces (w,h ∈ [320,2560],
-     * w*h ≤ 4M, dpi < 120 or ≥ 641, fps ∈ {30,60,90,110,120}). */
+    /* 2.5 display bridge parameters. The space's own settings are what the guest is told to
+     * render: the window it is scaled into is a host-side detail (and at this point often still
+     * 0×0, which is how the guest once got told to render nothing at all). Everything is then
+     * clamped into what the guest's ValidConfig accepts (w,h ∈ [320,2560], w*h ≤ 4M,
+     * dpi < 120 or ≥ 641, fps ∈ {30,60,90,110,120}) — a dpi of 240 is a perfectly ordinary
+     * phone density and an outright invalid value here. */
     struct oh_disp_cfg dcfg = { 720, 1280, 655, 60, 0, 0 };
-    if (g_window) {
-        int ww = ANativeWindow_getWidth(g_window);
-        int wh = ANativeWindow_getHeight(g_window);
-        if (ww >= 320 && ww <= 2560 && wh >= 320 && wh <= 2560 &&
-            (long long)ww * wh <= 4LL * 1024 * 1024) {
-            dcfg.w = (uint32_t)ww;
-            dcfg.h = (uint32_t)wh;
-            dcfg.orientation = (wh >= ww) ? 0 : 1;
+    {
+        const char *vs3; size_t vl3;
+        if (jfind(json, "settings", 8, &vs3, &vl3) && vl3 < 512) {
+            char sobj[513];
+            memcpy(sobj, vs3, vl3);
+            sobj[vl3] = 0;
+            uint32_t sw = 0, sh = 0, sfps = 0, sdpi = 0, sori = 0;
+            if (jgetuint(sobj, "width", &sw) == 0 && jgetuint(sobj, "height", &sh) == 0 &&
+                sw >= 320 && sw <= 2560 && sh >= 320 && sh <= 2560 &&
+                (uint64_t)sw * sh <= 4ULL * 1024 * 1024) {
+                dcfg.w = sw; dcfg.h = sh;
+            } else if (g_window) {
+                int ww = ANativeWindow_getWidth(g_window);
+                int wh = ANativeWindow_getHeight(g_window);
+                if (ww >= 320 && ww <= 2560 && wh >= 320 && wh <= 2560 &&
+                    (long long)ww * wh <= 4LL * 1024 * 1024) {
+                    dcfg.w = (uint32_t)ww;
+                    dcfg.h = (uint32_t)wh;
+                }
+            }
+            if (jgetuint(sobj, "fps", &sfps) == 0 &&
+                (sfps == 30 || sfps == 60 || sfps == 90 || sfps == 110 || sfps == 120))
+                dcfg.fps = sfps;
+            if (jgetuint(sobj, "density", &sdpi) == 0 && (sdpi < 120 || sdpi >= 641))
+                dcfg.dpi = sdpi;
+            if (jgetuint(sobj, "orientation", &sori) == 0) dcfg.orientation = sori;
         }
     }
+    if (dcfg.orientation > 1) dcfg.orientation = (dcfg.h >= dcfg.w) ? 0 : 1;
     dcfg.session = ((uint64_t)time(NULL) * 1000003u + (uint64_t)getpid()) | 1;
     if (write_display_params(rootfs, &dcfg) == 0)
         rlog("display parameters: %ux%u @%ufps session %llu",
@@ -1157,10 +1337,20 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
                 gpu_enabled = 0;
         }
     }
-    if (gpu_enabled)
-        gpu_boot(rootfs, dcfg.w, dcfg.h, gpu_dpi, dcfg.fps);
-    else
+    if (gpu_enabled) {
+        /* The window has to reach the renderer after it is up: SetWindow() called before
+         * Start() was a no-op, so the pass-through rendered into nothing and the space stayed
+         * black while the software path — which nobody had asked for — never ran either. */
+        if (gpu_boot(rootfs, dcfg.w, dcfg.h, gpu_dpi, dcfg.fps) == 0) {
+            gpu_attach_window(g_window);
+            oh_event(EV_GPU_UP, 1, NULL);
+        } else {
+            oh_event(EV_GPU_UP, 0, NULL);
+        }
+    } else {
         rlog("gpu: disabled by config");
+        oh_event(EV_GPU_UP, 0, NULL);
+    }
 
     /* 3. spawn the guest */
     g_stopping = 0;
@@ -1184,9 +1374,11 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         return -5;
     }
     g_child = pid;
+    __atomic_store_n(&g_frames, 0, __ATOMIC_RELAXED);
     /* 4. bridges: connect to the guest's display.sock / input.sock once they listen */
     display_start(rootfs);
     input_start(rootfs);
+    wait_start();
     pthread_mutex_unlock(&g_lock);
     (*env)->ReleaseStringUTFChars(env, cfg, json);
     return 0;
@@ -1214,6 +1406,8 @@ static jint oh_surface(JNIEnv *env, jclass cls, jobject surface) {
 static jint oh_stop(JNIEnv *env, jclass cls) {
     (void)env;
     (void)cls;
+    /* the supervisor must not read this as a crash of its own */
+    g_stopping = 1;
     pthread_mutex_lock(&g_lock);
     pid_t pid = g_child;
     g_child = 0;
@@ -1223,12 +1417,13 @@ static jint oh_stop(JNIEnv *env, jclass cls) {
         kill(pid, SIGTERM);
     }
     pthread_mutex_unlock(&g_lock);
+    wait_stop();
     api_stop();
     display_stop();
     input_stop();
     gpu_halt();
     if (pid > 0) {
-        /* give it a moment, then force */
+        /* give it a moment, then force — the supervisor already reaped it if it went quietly */
         for (int i = 0; i < 10; i++) {
             if (waitpid(pid, NULL, WNOHANG) == pid) { pid = 0; break; }
             usleep(100 * 1000);
@@ -1293,10 +1488,40 @@ static jint oh_touch(JNIEnv *env, jclass cls, jint action, jfloat x, jfloat y,
     return ok ? 0 : -1;
 }
 
+/* A navigation key on the guest's input channel (docs/oh-protocol.md §10): kind 6 is back,
+ * kind 7 is home, and the MMI server turns either one into a complete press of its own. */
+static jint oh_key(JNIEnv *env, jclass cls, jint kind) {
+    (void)env;
+    (void)cls;
+    if (kind != 6 && kind != 7) return -1;
+    pthread_mutex_lock(&g_input_lock);
+    int ok = g_input_ready && g_input_sock >= 0 && !g_stopping;
+    if (ok) {
+        uint8_t msg[24];
+        memset(msg, 0, sizeof(msg));
+        uint32_t k32 = (uint32_t)kind, l32 = (uint32_t)sizeof(msg);
+        memcpy(msg + 0, &k32, 4);
+        memcpy(msg + 4, &l32, 4);
+        memcpy(msg + 8, &g_input_session, 8);
+        ok = send(g_input_sock, msg, sizeof(msg), MSG_NOSIGNAL) == (ssize_t)sizeof(msg);
+    }
+    pthread_mutex_unlock(&g_input_lock);
+    return ok ? 0 : -1;
+}
+
+/** Frames the display bridge has put on the window; the UI watches it to tell "drawing" from "stuck". */
+static jlong oh_frames(JNIEnv *env, jclass cls) {
+    (void)env;
+    (void)cls;
+    return (jlong)__atomic_load_n(&g_frames, __ATOMIC_RELAXED);
+}
+
 static const JNINativeMethod kMethods[] = {
     { "ohStart",   "(Ljava/lang/String;)I",                  (void *)oh_start },
     { "ohSurface", "(Landroid/view/Surface;)I",              (void *)oh_surface },
     { "ohTouch",   "(IFFI)I",                                (void *)oh_touch },
+    { "ohKey",     "(I)I",                                   (void *)oh_key },
+    { "ohFrames",  "()J",                                    (void *)oh_frames },
     { "ohStop",    "()I",                                    (void *)oh_stop },
     { "ohVersion", "()Ljava/lang/String;",                  (void *)oh_version },
 };
@@ -1305,6 +1530,17 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
     JNIEnv *env;
     if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+
+    /* the way back: log lines and bridge events reach Java through OhEngine.nativeEvent */
+    g_vm = vm;
+    jclass cb = (*env)->FindClass(env, "app/andropaw/openharmony/OhEngine");
+    if (cb) {
+        g_cb_cls = (jclass)(*env)->NewGlobalRef(env, cb);
+        g_cb_method = (*env)->GetStaticMethodID(env, g_cb_cls, "nativeEvent", "(IJLjava/lang/String;)V");
+        if (!g_cb_method) rlog("ohrt: OhEngine.nativeEvent not found — events stay in the log file only");
+        (*env)->DeleteLocalRef(env, cb);
+    }
+
     jclass cls = (*env)->FindClass(env, "app/andropaw/openharmony/OhEngine$OhNative");
     if (!cls) {
         LOGE("OhNative class not found");
@@ -1322,4 +1558,12 @@ JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *reserved) {
     (void)vm;
     (void)reserved;
     oh_stop(NULL, NULL);
+    if (g_cb_cls) {
+        JNIEnv *env;
+        if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) == JNI_OK && env)
+            (*env)->DeleteGlobalRef(env, g_cb_cls);
+        g_cb_cls = NULL;
+        g_cb_method = NULL;
+    }
+    g_vm = NULL;
 }

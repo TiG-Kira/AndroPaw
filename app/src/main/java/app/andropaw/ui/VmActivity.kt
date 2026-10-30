@@ -112,11 +112,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.andropaw.core.AndroidSession
 import app.andropaw.core.Engine
-import app.andropaw.core.GuestLog
 import app.andropaw.core.GuestVm
 import app.andropaw.core.ImageStore
 import app.andropaw.core.InputService
+import app.andropaw.core.MachineSession
+import app.andropaw.openharmony.OhSession
 import kotlinx.coroutines.delay
 import kotlin.concurrent.thread
 import top.yukonga.miuix.kmp.basic.Button
@@ -133,15 +135,20 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
 import top.yukonga.miuix.kmp.glass.GlassPopupItem
 
-/** Процесс :vm держит ровно одну машину. */
+/** Процесс :vm держит ровно одну машину — Android или OpenHarmony. */
 object VmHost {
-    @Volatile var vm: GuestVm? = null
+    @Volatile var session: MachineSession? = null
 }
 
 class VmActivity : ComponentActivity() {
-    private lateinit var vm: GuestVm
+    /** the machine this page drives: an Android one (core/GuestVm) or an OpenHarmony space */
+    private lateinit var session: MachineSession
+    /** the Android machine behind it, when it is one — adb, radio, shell, recovery are its own */
+    private val vm: GuestVm? get() = session.android
+    /** the OpenHarmony space behind it, when it is one */
+    private val oh: OhSession? get() = session as? OhSession
     private lateinit var surfaceView: SurfaceView
-    private lateinit var guest: GuestScreen
+    private var guest: GuestScreen? = null
     /** the guest's screen size, for what takes frames off it (VNC, recording) */
     private var guestW = 0
     private var guestH = 0
@@ -164,8 +171,8 @@ class VmActivity : ComponentActivity() {
         java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "vm-surface").apply { isDaemon = true } }
     }
     private fun handSurface(s: android.view.Surface?) {
-        if (!::vm.isInitialized) return
-        surfaceHand.execute { runCatching { vm.surface = s } }
+        if (!::session.isInitialized) return
+        surfaceHand.execute { runCatching { session.attachSurface(s) } }
     }
     /** the guest screen's frame count as it was when this activity came back, for the check below */
     private var shownAtResume = -1L
@@ -190,36 +197,57 @@ class VmActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // the overlay pads itself (status bar, navigation bar, keyboard): the terminal stays above the keyboard
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        val id = intent.getStringExtra(EXTRA_ID)
-        val cur = VmHost.vm
-        val img = ((if (id != null) ImageStore.get(this, id) else null) ?: cur?.img)
-            ?.let { if (cur?.img?.id == it.id) it else app.andropaw.importer.Analyzer.refresh(this, it).effective() }
-        if (img == null) { finish(); return }
-        if (cur != null && cur.img.id != img.id && cur.state != GuestVm.State.STOPPED) {
-            // в процессе уже живёт другая машина — её надо сначала остановить
-            cur.stop()
-            restartProcess(img.id)
-            return
-        }
-        vm = if (cur != null && cur.img.id == img.id) cur
-            else GuestVm(applicationContext, img).also { it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.vm = it }
-        vm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
-        // 大量 137：只提示，不擅自恢复（用户决策）
-        vm.onMassDeath = { runOnUiThread { massDeathNotice.value = true } }
-        // 软重启会换掉 surfaceflinger：让显示视图重新绑定，避免画面停在旧帧
-        vm.onScreenReset = {
-            runCatching {
-                guest.poke()
-                if (::guest.isInitialized) guest.format = if (vm.engine == app.andropaw.core.Engine.N64) 1 else guest.format
+        val ohId = intent.getStringExtra(EXTRA_OH_SPACE)
+        val cur = VmHost.session
+        if (ohId != null) {
+            // An OpenHarmony space: same page, same overlay, no Android behind it
+            val space = app.andropaw.openharmony.OhSpaceStore.get(this, ohId)
+            if (space == null) { finish(); return }
+            if (cur != null && (cur.id != space.id || cur.kind != MachineSession.Kind.OPENHARMONY) &&
+                cur.state != GuestVm.State.STOPPED) {
+                // в процессе уже живёт другая машина — её надо сначала остановить
+                cur.stop()
+                restartProcess(ohId, oh = true)
+                return
             }
+            session = if (cur != null && cur.id == space.id && cur.kind == MachineSession.Kind.OPENHARMONY) cur
+                else app.andropaw.openharmony.OhSession(applicationContext, space).also { VmHost.session = it }
+        } else {
+            val id = intent.getStringExtra(EXTRA_ID)
+            val curVm = cur?.android
+            val img = ((if (id != null) ImageStore.get(this, id) else null) ?: curVm?.img)
+                ?.let { if (curVm?.img?.id == it.id) it else app.andropaw.importer.Analyzer.refresh(this, it).effective() }
+            if (img == null) { finish(); return }
+            if (curVm != null && curVm.img.id != img.id && curVm.state != GuestVm.State.STOPPED) {
+                curVm.stop()
+                restartProcess(img.id)
+                return
+            }
+            val gvm = if (curVm != null && curVm.img.id == img.id) curVm
+                else GuestVm(applicationContext, img).also {
+                    it.recoveryMode = intent.getBooleanExtra(EXTRA_RECOVERY, false); VmHost.session = AndroidSession(it)
+                }
+            VmHost.session = AndroidSession(gvm)
+            session = VmHost.session!!
+            gvm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+            // 大量 137：只提示，不擅自恢复（用户决策）
+            gvm.onMassDeath = { runOnUiThread { massDeathNotice.value = true } }
+            // 软重启会换掉 surfaceflinger：让显示视图重新绑定，避免画面停在旧帧
+            gvm.onScreenReset = {
+                runCatching {
+                    val g = guest ?: return@runCatching
+                    g.poke()
+                    g.format = if (gvm.engine == app.andropaw.core.Engine.N64) 1 else g.format
+                }
+            }
+            requestIgnoreBatteryOptimizationsOnce()
+            gvm.onFreeze = { f -> runOnUiThread { frozenState.value = f } }
         }
-        requestIgnoreBatteryOptimizationsOnce()
-        vm.onFreeze = { f -> runOnUiThread { frozenState.value = f } }
-        val s = vm.settings
-        showLed = s.showLed
-        if (s.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        showLed = session.showLed
+        if (session.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        val (gw, gh) = if (vm.engine == Engine.GB) 480 to 800 else s.width to s.height
+        val gw = session.screenW
+        val gh = session.screenH
         val root = FrameLayout(this).apply { setBackgroundColor(0xff000000.toInt()) }
         box = FrameLayout(this)
         surfaceView = SurfaceView(this)
@@ -228,22 +256,41 @@ class VmActivity : ComponentActivity() {
             override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { handSurface(h.surface) }
             override fun surfaceDestroyed(h: SurfaceHolder) { handSurface(null) }
         })
-        guestW = gw; guestH = gh
-        guest = GuestScreen(this, gw, gh).apply {
-            input = vm.input
-            fb = if (vm.recoveryMode) app.andropaw.core.RecoveryImage.fb(vm.paths) else vm.paths.fb
-            if (vm.recoveryMode) pages = 2
+        if (session.kind == MachineSession.Kind.OPENHARMONY) {
+            // the guest's own bridges (display.sock / input.sock) draw into this surface and take
+            // touches back out of it; there is no fb0 to copy frames from
+            surfaceView.setOnTouchListener { v, e ->
+                val idx = e.actionIndex
+                val action = when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_POINTER_DOWN -> android.view.MotionEvent.ACTION_DOWN
+                    android.view.MotionEvent.ACTION_POINTER_UP -> android.view.MotionEvent.ACTION_UP
+                    android.view.MotionEvent.ACTION_OUTSIDE -> android.view.MotionEvent.ACTION_CANCEL
+                    else -> e.actionMasked
+                }
+                val w = v.width.coerceAtLeast(1)
+                val ht = v.height.coerceAtLeast(1)
+                app.andropaw.openharmony.OhEngine.touch(action, e.getX(idx) / w, e.getY(idx) / ht, e.getPointerId(idx))
+                true
+            }
         }
-        // 5.0+ renders through the standalone glserverd into fb0 (see GuestVm.glUp), shown like the software path
-        val useBridge = vm.engine == Engine.KK && s.gpu && !vm.recoveryMode && vm.img.api < 21
-        // the arm64 engine's GLES bridge shows SurfaceFlinger's frames in the same view, straight from the GPU; until
-        // the first of them (and with the software renderer) the screen is fb0 as before
-        val direct = vm.engine == Engine.N64 && vm.kernel.gpuBridge64 && s.gpu && !vm.recoveryMode
-        if (direct) { surfaceView.holder.setFixedSize(gw, gh); guest.direct = { app.andropaw.core.GlHost.presented() } }
-        surfaceView.visibility = if (useBridge || direct) View.VISIBLE else View.GONE
-        guest.passthrough = useBridge
+        guestW = gw; guestH = gh
+        // 5.0+ renders through the standalone glserverd into fb0 (see GuestVm.glUp), shown like the software path;
+        // OpenHarmony has no fb0 — its frames arrive through the display bridge, into the surface
+        val direct = session.surfaceFixed
+        if (direct) surfaceView.holder.setFixedSize(gw, gh)
+        surfaceView.visibility = if (session.needsSurface) View.VISIBLE else View.GONE
         box.addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
-        box.addView(guest, FrameLayout.LayoutParams(-1, -1))
+        session.fbFile?.let { fb ->
+            val g = GuestScreen(this, gw, gh).apply {
+                input = session.android?.input as? InputService
+                this.fb = fb
+                if (session.fbPages > 1) pages = session.fbPages
+            }
+            guest = g
+            if (direct) g.direct = { app.andropaw.core.GlHost.presented() }
+            g.passthrough = session.needsSurface && !direct
+            box.addView(g, FrameLayout.LayoutParams(-1, -1))
+        }
         root.addView(box, FrameLayout.LayoutParams(0, 0))
         // Overlay 里的 OverlayDialog / 下拉菜单依赖 Scaffold 提供的 LocalRootDialogStates 与
         // MiuixPopupHost：没有 Scaffold 宿主，状态挂进默认空表，窗口永远弹不出来。
@@ -264,7 +311,7 @@ class VmActivity : ComponentActivity() {
         setContentView(root)
 
         // экран гостя вписываем с сохранением пропорций над панелью кнопок
-        val navDp = if (!s.showNavBar) 0 else if (s.navSize == 0) 46 else 64
+        val navDp = if (!session.navBar) 0 else if (session.navSize == 0) 46 else 64
         // the window draws edge to edge (for the overlay's keyboard padding): the guest screen keeps out of the
         // camera cutout and system bars; the keyboard is not counted, so the screen does not jump when it opens
         var safeTop = 0
@@ -293,25 +340,29 @@ class VmActivity : ComponentActivity() {
             }
         }
 
-        vm.onFrame = { guest.rings++; guest.poke() }
-        state = vm.state
-        logLines.addAll(vm.lines().takeLast(200))
-        vm.onState { st -> runOnUiThread { state = st } }
-        vm.mic.onPermissionNeeded = { runOnUiThread { askMic.launch(android.Manifest.permission.RECORD_AUDIO) } }
-        vm.camera.onPermissionNeeded = { runOnUiThread { askCamera.launch(android.Manifest.permission.CAMERA) } }
-        led = vm.lights.current
-        vm.lights.onChange { l -> runOnUiThread { led = l } }
-        vm.onLog { line -> runOnUiThread { logLines.add(line); if (logLines.size > 400) logLines.removeRange(0, logLines.size - 400) } }
-        guest.start()
+        vm?.let { gvm ->
+            gvm.onFrame = { guest?.let { g -> g.rings++; g.poke() } }
+        }
+        state = session.state
+        logLines.addAll(session.lines().takeLast(200))
+        session.onState { st -> runOnUiThread { state = st } }
+        session.onLog { line -> runOnUiThread { logLines.add(line); if (logLines.size > 400) logLines.removeRange(0, logLines.size - 400) } }
+        vm?.let { gvm ->
+            gvm.mic.onPermissionNeeded = { runOnUiThread { askMic.launch(android.Manifest.permission.RECORD_AUDIO) } }
+            gvm.camera.onPermissionNeeded = { runOnUiThread { askCamera.launch(android.Manifest.permission.CAMERA) } }
+            led = gvm.lights.current
+            gvm.lights.onChange { l -> runOnUiThread { led = l } }
+        }
+        guest?.start()
         loadMenuOffset()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { vm.input.press(InputService.KEY_BACK) }
+            override fun handleOnBackPressed() { session.input.press(InputService.KEY_BACK) }
         })
 
         registerShell()
-        if (vm.state == GuestVm.State.STOPPED || vm.state == GuestVm.State.FAILED) {
-            thread(name = "vm-boot") { vm.boot() }
+        if (session.state == GuestVm.State.STOPPED || session.state == GuestVm.State.FAILED) {
+            thread(name = "vm-boot") { session.boot() }
         }
     }
 
@@ -326,8 +377,8 @@ class VmActivity : ComponentActivity() {
                     thread {
                         for (k in ks.split(' ').filter { it.isNotBlank() }) {
                             val code = k.trimEnd('d', 'u').toIntOrNull() ?: continue
-                            when { k.endsWith("d") -> vm.input.key(code, true); k.endsWith("u") -> vm.input.key(code, false)
-                                else -> { vm.input.key(code, true); Thread.sleep(80); vm.input.key(code, false) } }
+                            when { k.endsWith("d") -> session.input.key(code, true); k.endsWith("u") -> session.input.key(code, false)
+                                else -> { session.input.key(code, true); Thread.sleep(80); session.input.key(code, false) } }
                             Thread.sleep(150)
                         }
                     }
@@ -338,17 +389,18 @@ class VmActivity : ComponentActivity() {
                 // --ez frames true --es out <name>: the count of frames shown and the clock, for the testers
                 if (i.getBooleanExtra("frames", false)) {
                     val name = i.getStringExtra("out")?.takeIf { it.matches(Regex("[A-Za-z0-9_.-]+")) } ?: "frames.out"
-                    java.io.File(vm.paths.bin, name).writeText("shown=${guest.shown} direct=${guest.passthrough} ms=${android.os.SystemClock.uptimeMillis()}\n")
+                    java.io.File(vm?.paths?.bin ?: filesDir, name).writeText("shown=${guest?.shown} direct=${guest?.passthrough} ms=${android.os.SystemClock.uptimeMillis()}\n")
                     return
                 }
-                if (i.hasExtra("adb")) { if (i.getBooleanExtra("adb", false)) vm.adb.start() else vm.adb.stop(); return }
+                if (i.hasExtra("adb")) { val a = vm?.adb ?: return; if (i.getBooleanExtra("adb", false)) a.start() else a.stop(); return }
                 val cmd = i.getStringExtra("cmd") ?: return
                 // своё имя файла на каждую команду: медленная предыдущая команда не затрёт ответ
                 val name = i.getStringExtra("out")?.takeIf { it.matches(Regex("[A-Za-z0-9_.-]+")) } ?: "shell.out"
+                val gvm = vm ?: return
                 thread {
-                    val out = runCatching { vm.guestShell(cmd, 120_000) }.getOrElse { it.toString() }
-                    val tmp = java.io.File(vm.paths.bin, "$name.tmp")
-                    tmp.writeText(out + "\n<<done>>\n"); tmp.renameTo(java.io.File(vm.paths.bin, name))
+                    val out = runCatching { gvm.guestShell(cmd, 120_000) }.getOrElse { it.toString() }
+                    val tmp = java.io.File(gvm.paths.bin, "$name.tmp")
+                    tmp.writeText(out + "\n<<done>>\n"); tmp.renameTo(java.io.File(gvm.paths.bin, name))
                 }
             }
         }
@@ -359,13 +411,13 @@ class VmActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val code = map(keyCode) ?: return super.onKeyDown(keyCode, event)
-        if (event.repeatCount == 0) vm.input.key(code, true)
+        if (event.repeatCount == 0) session.input.key(code, true)
         return true
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         val code = map(keyCode) ?: return super.onKeyUp(keyCode, event)
-        vm.input.key(code, false)
+        session.input.key(code, false)
         return true
     }
 
@@ -379,9 +431,9 @@ class VmActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (!::vm.isInitialized) return
-        vm.sensors.resume(true)
-        vm.setUiVisible(true)
+        if (!::session.isInitialized) return
+        vm?.sensors?.resume(true)
+        session.setUiVisible(true)
         // coming back from the home page or from another app: the window's surface was destroyed
         // while we were away, so make sure the bridge holds the one that is on screen now (a
         // create that landed while the activity was stopping is easy to miss)
@@ -389,8 +441,8 @@ class VmActivity : ComponentActivity() {
             val s = surfaceView.holder.surface
             if (s != null && s.isValid) handSurface(s)
         }
-        guest.poke()
-        shownAtResume = guest.shown
+        guest?.poke()
+        shownAtResume = guest?.shown ?: 0L
         resumeCheckPosted = false
         postResumeCheck()
     }
@@ -401,24 +453,25 @@ class VmActivity : ComponentActivity() {
      * a frozen machine can be told apart from an idle one without restarting it.
      */
     private fun postResumeCheck() {
-        if (resumeCheckPosted || !::vm.isInitialized) return
+        if (resumeCheckPosted || !::session.isInitialized) return
         resumeCheckPosted = true
         uiHandler.postDelayed({
-            if (!::vm.isInitialized || isFinishing || isDestroyed) return@postDelayed
-            val running = vm.state == GuestVm.State.RUNNING
-            if (running && guest.shown == shownAtResume) {
-                vm.log("screen: nothing drawn ${RESUME_CHECK_MS / 1000}s after returning — rebinding the surface")
+            if (!::session.isInitialized || isFinishing || isDestroyed) return@postDelayed
+            val running = session.state == GuestVm.State.RUNNING
+            val drawn = guest?.shown ?: session.frames()
+            if (running && drawn == shownAtResume) {
+                session.log("screen: nothing drawn ${RESUME_CHECK_MS / 1000}s after returning — rebinding the surface")
                 runCatching {
                     val s = surfaceView.holder.surface
                     if (s != null && s.isValid) handSurface(s) else handSurface(null)
                 }
-                guest.poke()
+                guest?.poke()
                 uiHandler.postDelayed({
-                    if (!::vm.isInitialized || isFinishing || isDestroyed) return@postDelayed
-                    vm.log(
-                        "screen: after rebinding — shown=${guest.shown} (was $shownAtResume) " +
-                            "passthrough=${guest.passthrough} surface=${surfaceView.holder.surface?.isValid} " +
-                            "frames=${if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings}",
+                    if (!::session.isInitialized || isFinishing || isDestroyed) return@postDelayed
+                    session.log(
+                        "screen: after rebinding — shown=$drawn (was $shownAtResume) " +
+                            "passthrough=${guest?.passthrough} surface=${surfaceView.holder.surface?.isValid} " +
+                            "frames=${if (vm?.glInApp == true) dev.lk.m7sense.GlBridge.frames() else guest?.rings}",
                     )
                 }, RESUME_CHECK_MS)
             }
@@ -426,10 +479,11 @@ class VmActivity : ComponentActivity() {
     }
 
     override fun onPause() {
-        if (::vm.isInitialized) {
-            vm.sensors.resume(false); vm.setUiVisible(false)
+        if (::session.isInitialized) {
+            vm?.sensors?.resume(false)
+            session.setUiVisible(false)
             // 宿主切后台后 MIUI 的清理通常几秒内就到：先立刻刷一遍 oom pin 抢时间窗
-            runCatching { vm.reprotectNow() }
+            runCatching { session.reprotectNow() }
         }
         super.onPause()
     }
@@ -437,7 +491,7 @@ class VmActivity : ComponentActivity() {
     override fun onDestroy() {
         vnc?.stop(); vnc = null
         recorder?.let { r -> thread { r.stop() } }; recorder = null
-        if (::guest.isInitialized) guest.stop()
+        guest?.stop(); guest = null
         shellRx?.let { runCatching { unregisterReceiver(it) } }
         super.onDestroy()
     }
@@ -456,8 +510,8 @@ class VmActivity : ComponentActivity() {
 
     private fun stopVm() {
         thread {
-            vm.stop()
-            VmHost.vm = null
+            session.stop()
+            VmHost.session = null
             runOnUiThread { finishAndRemoveTask() }
             Thread.sleep(300)
             // GL-мост нельзя поднять повторно в том же процессе — процесс :vm уходит вместе с машиной
@@ -473,14 +527,34 @@ class VmActivity : ComponentActivity() {
     private fun loadMenuOffset() { menuOffset = Offset(uiPrefs.getFloat("menu_x", 0f), uiPrefs.getFloat("menu_y", 0f)) }
     private fun saveMenuOffset() { uiPrefs.edit().putFloat("menu_x", menuOffset.x).putFloat("menu_y", menuOffset.y).apply() }
 
-    private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.mic.permissionGranted() }
+    private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm?.mic?.permissionGranted() }
 
     private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     private fun toast(msg: String) = runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
 
     private fun guestAsync(cmd: String, done: ((String) -> Unit)? = null) {
-        thread { val out = runCatching { vm.guestShell(cmd, 60_000) }.getOrElse { it.toString() }; done?.invoke(out) }
+        val gvm = vm ?: return
+        thread { val out = runCatching { gvm.guestShell(cmd, 60_000) }.getOrElse { it.toString() }; done?.invoke(out) }
+    }
+
+    /**
+     * Where screenshots and recordings land: a folder of the guest's shared card for an Android
+     * machine (so its gallery sees them), the space's own data folder for OpenHarmony.
+     */
+    private fun mediaDir(sub: String): java.io.File? = vm?.let { gvm ->
+        app.andropaw.core.Sdcard.hostDir(gvm.paths)?.let { java.io.File(it, sub) }
+    } ?: oh?.let { java.io.File(app.andropaw.openharmony.OhSpaceStore.dataDir(this, it.space.id), sub) }
+
+    /** The path shown to the user — the guest's own for Android, the host's for OpenHarmony. */
+    private fun mediaPath(sub: String, name: String): String = vm?.let { gvm ->
+        gvm.img.sdcardPath.trimEnd('/') + "/$sub/$name"
+    } ?: java.io.File(mediaDir(sub), name).absolutePath
+
+    /** The guest's media scanner picks a new file up for its gallery — an Android thing. */
+    private fun scanMedia(sub: String, name: String) {
+        vm ?: return
+        guestAsync("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${mediaPath(sub, name)}")
     }
 
     /** Quote for the guest's /system/bin/sh. */
@@ -512,18 +586,17 @@ class VmActivity : ComponentActivity() {
      */
     private fun screenshot() {
         val name = "aemu-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".png"
-        val hostDir = app.andropaw.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Pictures") }
+        val hostDir = mediaDir("Pictures")
         if (hostDir == null) { toast(getString(R.string.m_failed)); return }
         fun save(b: android.graphics.Bitmap) = thread {
             val ok = runCatching {
                 hostDir.mkdirs()
                 java.io.File(hostDir, name).outputStream().use { check(b.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
             }.also { b.recycle() }.isSuccess
-            toast(if (ok) getString(R.string.m_screenshot_saved, vm.img.sdcardPath.trimEnd('/') + "/Pictures/$name") else getString(R.string.m_failed))
-            // the guest's media scanner picks the file up for its gallery
-            if (ok) guestAsync("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${vm.img.sdcardPath.trimEnd('/')}/Pictures/$name")
+            toast(if (ok) getString(R.string.m_screenshot_saved, mediaPath("Pictures", name)) else getString(R.string.m_failed))
+            if (ok) scanMedia("Pictures", name)
         }
-        guest.snapshot()?.let { save(it); return }
+        guest?.snapshot()?.let { save(it); return }
         if (surfaceView.width <= 0 || surfaceView.height <= 0) { toast(getString(R.string.m_failed)); return }
         val b = android.graphics.Bitmap.createBitmap(surfaceView.width, surfaceView.height, android.graphics.Bitmap.Config.ARGB_8888)
         runCatching {
@@ -542,7 +615,7 @@ class VmActivity : ComponentActivity() {
      */
     private fun grabFrame(into: android.graphics.Bitmap): Boolean {
         val dst = android.graphics.Rect(0, 0, into.width, into.height)
-        guest.snapshot()?.let { android.graphics.Canvas(into).drawBitmap(it, null, dst, null); it.recycle(); return true }
+        guest?.snapshot()?.let { android.graphics.Canvas(into).drawBitmap(it, null, dst, null); it.recycle(); return true }
         val sw = surfaceView.width
         val sh = surfaceView.height
         if (sw <= 0 || sh <= 0 || !surfaceView.holder.surface.isValid) return false
@@ -561,12 +634,13 @@ class VmActivity : ComponentActivity() {
 
     /** VNC on/off. Each session gets a password of its own, shown here and in the log. */
     private fun toggleVnc() {
+        val gvm = vm ?: return          // an OpenHarmony space has no InputService to feed the pointer into
         vnc?.let { it.stop(); vnc = null; vncOn.value = false; return }
         if (guestW <= 0 || guestH <= 0) { toast(getString(R.string.m_failed)); return }
         val password = (1..8).map { "abcdefghijkmnpqrstuvwxyz23456789".random() }.joinToString("")
         val bmp = android.graphics.Bitmap.createBitmap(guestW, guestH, android.graphics.Bitmap.Config.ARGB_8888)
-        val server = app.andropaw.core.VncServer(app.andropaw.core.VncServer.DEFAULT_PORT, password, guestW, guestH, vm.img.name,
-            { px -> if (grabFrame(bmp)) { bmp.getPixels(px, 0, guestW, 0, 0, guestW, guestH); true } else false }, vm.input, vm::log)
+        val server = app.andropaw.core.VncServer(app.andropaw.core.VncServer.DEFAULT_PORT, password, guestW, guestH, session.title,
+            { px -> if (grabFrame(bmp)) { bmp.getPixels(px, 0, guestW, 0, 0, guestW, guestH); true } else false }, gvm.input, session::log)
         if (!server.start()) { toast(getString(R.string.m_failed)); return }
         vnc = server; vncOn.value = true
         val ip = runCatching {
@@ -574,7 +648,7 @@ class VmActivity : ComponentActivity() {
                 .flatMap { it.inetAddresses.asSequence() }.firstOrNull { it is java.net.Inet4Address }?.hostAddress
         }.getOrNull() ?: "127.0.0.1"
         val where = getString(R.string.m_vnc_started, "$ip:${app.andropaw.core.VncServer.DEFAULT_PORT}", password)
-        vm.log("vnc: $where")
+        session.log("vnc: $where")
         runOnUiThread { Toast.makeText(this, where, Toast.LENGTH_LONG).show() }
     }
 
@@ -584,23 +658,24 @@ class VmActivity : ComponentActivity() {
             recorder = null; recOn.value = false
             thread {
                 r.stop()
-                toast(getString(R.string.m_screenshot_saved, vm.img.sdcardPath.trimEnd('/') + "/Movies/" + r.file.name))
-                guestAsync("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://${vm.img.sdcardPath.trimEnd('/')}/Movies/${r.file.name}")
+                toast(getString(R.string.m_screenshot_saved, mediaPath("Movies", r.file.name)))
+                scanMedia("Movies", r.file.name)
             }
             return
         }
-        val dir = app.andropaw.core.Sdcard.hostDir(vm.paths)?.let { java.io.File(it, "Movies") }
+        val dir = mediaDir("Movies")
         if (dir == null || guestW <= 0 || guestH <= 0) { toast(getString(R.string.m_failed)); return }
         val name = "aemu-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date()) + ".mp4"
-        val r = app.andropaw.core.ScreenRecorder(java.io.File(dir, name), guestW, guestH, ::grabFrame, vm::log)
+        val r = app.andropaw.core.ScreenRecorder(java.io.File(dir, name), guestW, guestH, ::grabFrame, session::log)
         if (!r.start()) { toast(getString(R.string.m_failed)); return }
         recorder = r; recOn.value = true
     }
 
     // APKs picked on the host are streamed into unique shared-card files and installed in order.
     private val pickApks = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val gvm = vm ?: return@registerForActivityResult
         if (uris.isEmpty()) return@registerForActivityResult
-        val dir = app.andropaw.core.Sdcard.hostDir(vm.paths)
+        val dir = app.andropaw.core.Sdcard.hostDir(gvm.paths)
         if (dir == null) { toast(getString(R.string.m_failed)); return@registerForActivityResult }
         toast(getString(R.string.m_install_apk_start) + if (uris.size > 1) " (${uris.size})" else "")
         thread {
@@ -612,15 +687,15 @@ class VmActivity : ComponentActivity() {
                 val result = runCatching {
                     val input = contentResolver.openInputStream(uri) ?: error("Cannot open selected APK")
                     input.use { i -> staged.outputStream().buffered(128 * 1024).use { o -> i.copyTo(o, 128 * 1024) } }
-                    val guestPath = vm.img.sdcardPath.trimEnd('/') + "/" + name
-                    vm.guestShell("pm install -r ${q(guestPath)}", 300_000)
+                    val guestPath = gvm.img.sdcardPath.trimEnd('/') + "/" + name
+                    gvm.guestShell("pm install -r ${q(guestPath)}", 300_000)
                 }
                 val output = result.getOrNull()?.trim().orEmpty()
                 if (result.isSuccess && output.lineSequence().lastOrNull { it.isNotBlank() } == "Success") installed++
                 else failures += "${index + 1}: ${(result.exceptionOrNull()?.message ?: output).ifBlank { getString(R.string.m_failed) }.take(120)}"
                 runCatching { staged.delete() }
             }
-            if (installed > 0) runCatching { app.andropaw.core.TreeFixer(this@VmActivity, vm.paths, vm.img, vm::log).seedOwners() }
+            if (installed > 0) runCatching { app.andropaw.core.TreeFixer(this@VmActivity, gvm.paths, gvm.img, session::log).seedOwners() }
             val summary = if (failures.isEmpty()) "$installed/${uris.size} APK installed" else
                 "$installed/${uris.size} APK installed; failed: ${failures.take(3).joinToString("; ")}"
             toast(summary.take(400))
@@ -628,8 +703,9 @@ class VmActivity : ComponentActivity() {
     }
 
     private fun sendSms(from: String, body: String) {
+        val gvm = vm ?: return
         // through the emulated modem: stored, notified and rung like a real SMS on every version
-        if (vm.ril.sms(from, body)) { toast(getString(R.string.m_sms_sent)); return }
+        if (gvm.ril.sms(from, body)) { toast(getString(R.string.m_sms_sent)); return }
         // radio emulation off: the message is written straight into the SMS provider inbox (4.1+)
         val cmd = "content insert --uri content://sms/inbox --bind address:s:${q(from)} --bind body:s:${q(body)} " +
             "--bind read:i:0 --bind date:l:${System.currentTimeMillis()}"
@@ -652,9 +728,10 @@ class VmActivity : ComponentActivity() {
 
     @Composable
     private fun DeviceDialog(onDone: () -> Unit) {
+        val gvm = vm ?: return
         var airplane by remember { mutableStateOf(false) }
         var awake by remember { mutableStateOf(false) }
-        val ns = if (vm.img.api >= 17) "global" else "system"
+        val ns = if (gvm.img.api >= 17) "global" else "system"
         // the switches show what the guest has now
         LaunchedEffect(Unit) {
             guestAsync("settings get $ns airplane_mode_on; settings get $ns stay_on_while_plugged_in") { out ->
@@ -684,16 +761,17 @@ class VmActivity : ComponentActivity() {
 
     @Composable
     private fun AdbDialog(onDone: () -> Unit) {
-        var on by remember { mutableStateOf(vm.adb.running) }
+        val gvm = vm ?: return
+        var on by remember { mutableStateOf(gvm.adb.running) }
         MiuixDialog(show = true, title = stringResource(R.string.m_adb), onDismissRequest = onDone) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.m_adb_enable), Modifier.weight(1f))
-                Switch(on, { v -> if (v) vm.adb.start() else vm.adb.stop(); on = vm.adb.running })
+                Switch(on, { v -> if (v) gvm.adb.start() else gvm.adb.stop(); on = gvm.adb.running })
             }
             if (on) {
                 val ips = app.andropaw.core.AdbServer.addresses()
                 for (ip in ips.ifEmpty { listOf("127.0.0.1") })
-                    Text("adb connect $ip:${vm.adb.port}", fontSize = 15.sp,
+                    Text("adb connect $ip:${gvm.adb.port}", fontSize = 15.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
             }
             Text(stringResource(R.string.m_adb_hint), fontSize = 12.sp)
@@ -709,7 +787,7 @@ class VmActivity : ComponentActivity() {
             DialogButtonRow(listOf(
                 DialogAction(stringResource(R.string.close), onClick = onDone),
                 DialogAction(stringResource(R.string.m_call_ring), onClick = {
-                    if (!vm.ril.ring(from.trim())) toast(getString(R.string.m_failed))
+                    if (vm?.ril?.ring(from.trim()) != true) toast(getString(R.string.m_failed))
                     onDone()
                 }, primary = true),
             ))
@@ -765,18 +843,22 @@ class VmActivity : ComponentActivity() {
     }
 
     private fun rebootVm(recovery: Boolean = false) {
-        val id = vm.img.id
+        val id = session.id
+        val ohSpace = session.kind == MachineSession.Kind.OPENHARMONY
         thread {
-            vm.stop()
-            VmHost.vm = null
-            // the GL bridge cannot come up twice in one process, so a reboot restarts the :vm process
-            runOnUiThread { restartProcess(id, recovery) }
+            session.stop()
+            VmHost.session = null
+            // the GL bridge — and the OpenHarmony runner's own globals — cannot come up twice in
+            // one process, so a reboot restarts the :vm process and starts over
+            runOnUiThread { restartProcess(id, recovery, ohSpace) }
         }
     }
 
-    private fun restartProcess(id: String, recovery: Boolean = false) {
-        val i = Intent(this, VmActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    private fun restartProcess(id: String, recovery: Boolean = false, oh: Boolean = false) {
+        val i = Intent(this, VmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).apply {
+            if (oh) putExtra(EXTRA_OH_SPACE, id)
+            else putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
+        }
         val pi = android.app.PendingIntent.getActivity(this, 1, i, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_CANCEL_CURRENT)
         (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
         finishAndRemoveTask()
@@ -791,10 +873,24 @@ class VmActivity : ComponentActivity() {
         var showTerm by remember { mutableStateOf(false) }
         var dialog by remember { mutableStateOf(Dlg.NONE) }
         // recovery is "running" too, but has no Android behind am/pm/settings
-        val running = state == GuestVm.State.RUNNING && !vm.recoveryMode
+        val gvm = vm
+        val running = state == GuestVm.State.RUNNING && gvm?.recoveryMode != true
         var seconds by remember { mutableStateOf(0L) }
         var frames by remember { mutableStateOf(0L) }
-        LaunchedEffect(Unit) { while (true) { if (vm.recoveryMode) guest.format = vm.recoveryFormat else if (vm.engine == app.andropaw.core.Engine.N64) guest.format = 1; seconds = vm.bootSeconds(); frames = if (vm.glInApp) dev.lk.m7sense.GlBridge.frames() else guest.rings; delay(500) } }
+        LaunchedEffect(Unit) {
+            while (true) {
+                val g = guest
+                if (gvm?.recoveryMode == true) g?.format = gvm.recoveryFormat
+                else if (gvm?.engine == app.andropaw.core.Engine.N64) g?.format = 1
+                seconds = session.bootSeconds
+                frames = when {
+                    gvm?.glInApp == true -> dev.lk.m7sense.GlBridge.frames()
+                    g != null -> g.rings
+                    else -> session.frames()
+                }
+                delay(500)
+            }
+        }
         // как только гость начал рисовать — карточку убираем, остаётся маленький индикатор
         val drawing = frames > 30
         // The "more" menu: the button and the panel it drops are hosted apart. GlassDropdownPopup lays
@@ -809,13 +905,16 @@ class VmActivity : ComponentActivity() {
         // AgentPaw floating chat: the entry on the operating page itself. Its shell rides the live
         // VM's own runner — no second qemu-user start.
         var agentOpen by remember { mutableStateOf(false) }
+        // the AgentPaw shell rides the live machine's own runner — an OpenHarmony space has no
+        // shell to ride, so its chat entry stays disabled instead of failing on every turn
         val agentBridge = remember {
+            val g = vm ?: return@remember null
             app.andropaw.agent.AgentVmBridge(applicationContext, null).apply {
-                imageId = vm.img.id
-                inlineShell = { cmd, t -> vm.guestRunner.run(listOf("/system/bin/sh", "-c", vm.shellPrefix + cmd), t) }
+                imageId = g.img.id
+                inlineShell = { cmd, t -> g.guestRunner.run(listOf("/system/bin/sh", "-c", g.shellPrefix + cmd), t) }
             }
         }
-        LaunchedEffect(Unit) { app.andropaw.agent.ChatSession.attach(applicationContext, agentBridge) }
+        LaunchedEffect(Unit) { agentBridge?.let { app.andropaw.agent.ChatSession.attach(applicationContext, it) } }
         app.andropaw.ui.RebootNoticeHost()
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
@@ -835,7 +934,7 @@ class VmActivity : ComponentActivity() {
                 modifier = Modifier.align(Alignment.Center),
             ) { BootCard(seconds) }
 
-            if (drawing && state == GuestVm.State.BOOTING && !showLog && vm.screenUpAt == 0L) {
+            if (drawing && state == GuestVm.State.BOOTING && !showLog && vm?.screenUpAt == 0L) {
                 Box(Modifier.align(Alignment.TopStart).displayCutoutPadding().statusBarsPadding().padding(8.dp)
                     .clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f))) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -887,10 +986,12 @@ class VmActivity : ComponentActivity() {
 
             // the menu's entries — hoisted: the button and the panel are hosted apart, and the panel
             // is laid out on this box (the page), see at the end of it
+            val caps = session.caps
             val menuItems = buildList {
-                add(GlassMenuItem(stringResource(R.string.agent_chat_title), Icons.Rounded.AutoAwesome, enabled = running) { agentOpen = true })
+                add(GlassMenuItem(stringResource(R.string.agent_chat_title), Icons.Rounded.AutoAwesome,
+                    enabled = running && agentBridge != null) { agentOpen = true })
                 add(GlassMenuItem(stringResource(R.string.log), Icons.Rounded.Terminal) { showLog = true })
-                add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
+                if (caps.shell) add(GlassMenuItem(stringResource(R.string.m_terminal), Icons.Rounded.Code, enabled = running) { showTerm = true })
                 // back to the app's home page: the machine keeps running in the :vm process
                 // (Keeper keeps it alive) and the home page shows it as running
                 add(GlassMenuItem(stringResource(R.string.m_back_home), Icons.Rounded.Close) {
@@ -899,37 +1000,42 @@ class VmActivity : ComponentActivity() {
                             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
                     }
                 })
-                add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { vm.input.press(InputService.KEY_VOLUMEUP) })
-                add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { vm.input.press(InputService.KEY_VOLUMEDOWN) })
-                add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER) })
-                add(GlassMenuItem(stringResource(R.string.m_power_menu), Icons.Rounded.PowerSettingsNew) { vm.input.press(InputService.KEY_POWER, 1500) })
+                if (gvm != null) {
+                    add(GlassMenuItem(stringResource(R.string.vol_up), Icons.Rounded.VolumeUp) { session.input.press(InputService.KEY_VOLUMEUP) })
+                    add(GlassMenuItem(stringResource(R.string.vol_down), Icons.Rounded.VolumeDown) { session.input.press(InputService.KEY_VOLUMEDOWN) })
+                    add(GlassMenuItem(stringResource(R.string.power), Icons.Rounded.PowerSettingsNew) { session.input.press(InputService.KEY_POWER) })
+                    add(GlassMenuItem(stringResource(R.string.m_power_menu), Icons.Rounded.PowerSettingsNew) { session.input.press(InputService.KEY_POWER, 1500) })
+                }
                 // long-press Menu makes 2.x–4.x call InputMethodManager.toggleSoftInput: the firmware's own keyboard
-                if (!vm.recoveryMode) {
+                if (gvm != null && !gvm.recoveryMode) {
                     add(GlassMenuItem(stringResource(R.string.m_keyboard), Icons.Rounded.Keyboard, enabled = running) {
                         // 5.0+ hides the soft keyboard while it sees hardware keys and has no long-Menu toggle
-                        if (vm.img.api >= 21) guestAsync("settings put secure show_ime_with_hard_keyboard 1")
-                        else vm.input.press(InputService.KEY_MENU, 1000)
+                        if (gvm.img.api >= 21) guestAsync("settings put secure show_ime_with_hard_keyboard 1")
+                        else session.input.press(InputService.KEY_MENU, 1000)
                     })
                     add(GlassMenuItem(stringResource(R.string.m_paste), Icons.Rounded.ContentPaste, enabled = running) { pasteToGuest() })
-                    add(GlassMenuItem(stringResource(R.string.m_sms), Icons.Rounded.Sms, enabled = running) { dialog = Dlg.SMS })
-                    add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
-                    add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
-                    add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
+                    if (caps.telephony) {
+                        add(GlassMenuItem(stringResource(R.string.m_sms), Icons.Rounded.Sms, enabled = running) { dialog = Dlg.SMS })
+                        add(GlassMenuItem(stringResource(R.string.m_call), Icons.Rounded.Call, enabled = running) { dialog = Dlg.CALL })
+                    }
+                    if (caps.battery) add(GlassMenuItem(stringResource(R.string.m_battery), Icons.Rounded.BatteryStd, enabled = running) { dialog = Dlg.BATTERY })
+                    if (caps.installApk) add(GlassMenuItem(stringResource(R.string.m_install_apk), Icons.Rounded.InstallMobile, enabled = running) {
                         pickApks.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream", "*/*"))
                     })
-                    add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
-                    add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })
+                    if (caps.device) add(GlassMenuItem(stringResource(R.string.m_device), Icons.Rounded.Tune, enabled = running) { dialog = Dlg.DEVICE })
+                    if (caps.adb) add(GlassMenuItem(stringResource(R.string.m_adb), Icons.Rounded.Lan, enabled = running) { dialog = Dlg.ADB })
                     add(GlassMenuItem(stringResource(R.string.m_settings), Icons.Rounded.Settings, enabled = running) {
                         guestAsync("am start -a android.settings.SETTINGS")
                     })
                 }
-                add(GlassMenuItem(stringResource(R.string.m_screenshot), Icons.Rounded.Screenshot, enabled = state == GuestVm.State.RUNNING) { screenshot() })
-                add(GlassMenuItem(
+                if (caps.screenshot) add(GlassMenuItem(stringResource(R.string.m_screenshot), Icons.Rounded.Screenshot,
+                    enabled = state == GuestVm.State.RUNNING) { screenshot() })
+                if (caps.record) add(GlassMenuItem(
                     stringResource(if (recOn.value) R.string.m_record_stop else R.string.m_record),
                     Icons.Rounded.Videocam,
                     enabled = state == GuestVm.State.RUNNING || recOn.value,
                 ) { toggleRecording() })
-                add(GlassMenuItem(
+                if (caps.vnc) add(GlassMenuItem(
                     stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc),
                     Icons.Rounded.Cast,
                 ) { toggleVnc() })
@@ -937,11 +1043,11 @@ class VmActivity : ComponentActivity() {
                     menuOffset = Offset.Zero; saveMenuOffset()
                 })
                 add(GlassMenuItem(stringResource(R.string.m_reboot), Icons.Rounded.RestartAlt) { rebootVm() })
-                add(GlassMenuItem(
-                    stringResource(if (vm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
+                if (gvm != null) add(GlassMenuItem(
+                    stringResource(if (gvm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
                     Icons.Rounded.RestartAlt,
-                    enabled = vm.recoveryMode || app.andropaw.core.RecoveryImage.installed(vm.paths),
-                ) { rebootVm(!vm.recoveryMode) })
+                    enabled = gvm.recoveryMode || app.andropaw.core.RecoveryImage.installed(gvm.paths),
+                ) { rebootVm(!gvm.recoveryMode) })
                 add(GlassMenuItem(stringResource(R.string.shutdown), Icons.Rounded.Close) { stopVm() })
             }
 
@@ -959,7 +1065,7 @@ class VmActivity : ComponentActivity() {
             if (massDeathNotice.value) {
                 Box(
                     Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
-                        .padding(bottom = if (vm.settings.navSize == 0) 56.dp else 76.dp, start = 12.dp, end = 12.dp)
+                        .padding(bottom = if (session.navSize == 0) 56.dp else 76.dp, start = 12.dp, end = 12.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(MiuixTheme.colorScheme.surfaceContainerHighest)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -982,16 +1088,16 @@ class VmActivity : ComponentActivity() {
             if (!showLog && !showTerm) {
                 FloatingToolbar(
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
-                        .padding(bottom = if (vm.settings.navSize == 0) 3.dp else 6.dp),
-                    showKeys = vm.settings.showNavBar,
-                    agentEnabled = running,
+                        .padding(bottom = if (session.navSize == 0) 3.dp else 6.dp),
+                    showKeys = session.navBar,
+                    agentEnabled = running && agentBridge != null,
                     onMenu = { menuOpen = true },
                     onMenuBounds = { r -> menuIcon = r },
                     onAgent = { agentOpen = true },
                 )
             }
 
-            if (agentOpen) {
+            if (agentOpen && agentBridge != null) {
                 app.andropaw.agent.AgentChatOverlay(
                     bridge = agentBridge,
                     onDismiss = { agentOpen = false },
@@ -1037,10 +1143,10 @@ class VmActivity : ComponentActivity() {
         onMenuBounds: (androidx.compose.ui.geometry.Rect) -> Unit,
         onAgent: () -> Unit,
     ) {
-        val compact = vm.settings.navSize == 0
+        val compact = session.navSize == 0
         val keys = remember(showKeys) {
             if (!showKeys) emptyList()
-            else vm.settings.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL }
+            else session.navKeys.split(',').filter { it in app.andropaw.core.VmSettings.NAV_ALL }
         }
         val btn = if (compact) 36.dp else 48.dp
         Box(modifier.clip(CircleShape).background(MiuixTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f))) {
@@ -1092,8 +1198,8 @@ class VmActivity : ComponentActivity() {
                 val down = awaitFirstDown()
                 pressed = true
                 val t0 = android.os.SystemClock.uptimeMillis()
-                if (k == "home") vm.input.home(true)
-                else if (code != 0) vm.input.key(code, true)
+                if (k == "home") session.input.home(true)
+                else if (code != 0) session.input.key(code, true)
                 // the D-pad button is a little trackball: sliding the finger sends arrows, a tap selects
                 var acc = Offset.Zero
                 var moved = false
@@ -1105,10 +1211,10 @@ class VmActivity : ComponentActivity() {
                         while (kotlin.math.abs(acc.x) >= step || kotlin.math.abs(acc.y) >= step) {
                             moved = true
                             if (kotlin.math.abs(acc.x) >= kotlin.math.abs(acc.y)) {
-                                vm.input.press(if (acc.x > 0) InputService.KEY_RIGHT else InputService.KEY_LEFT, 30)
+                                session.input.press(if (acc.x > 0) InputService.KEY_RIGHT else InputService.KEY_LEFT, 30)
                                 acc = Offset(acc.x - step * kotlin.math.sign(acc.x), acc.y)
                             } else {
-                                vm.input.press(if (acc.y > 0) InputService.KEY_DOWN else InputService.KEY_UP, 30)
+                                session.input.press(if (acc.y > 0) InputService.KEY_DOWN else InputService.KEY_UP, 30)
                                 acc = Offset(acc.x, acc.y - step * kotlin.math.sign(acc.y))
                             }
                         }
@@ -1117,10 +1223,10 @@ class VmActivity : ComponentActivity() {
                     if (!c.pressed) break
                 }
                 pressed = false
-                if (k == "home") vm.input.home(false)
-                else if (code != 0) vm.input.key(code, false)
-                else if (k == "recents") vm.input.recents(vm.img.api, vm.img.skin)
-                else if (k == "dpad" && !moved) vm.input.press(InputService.KEY_CENTER, if (android.os.SystemClock.uptimeMillis() - t0 > 500) 700 else 80)
+                if (k == "home") session.input.home(false)
+                else if (code != 0) session.input.key(code, false)
+                else if (k == "recents") session.input.recents(vm?.img?.api ?: 0, vm?.img?.skin ?: "")
+                else if (k == "dpad" && !moved) session.input.press(InputService.KEY_CENTER, if (android.os.SystemClock.uptimeMillis() - t0 > 500) 700 else 80)
             }
         }, contentAlignment = Alignment.Center) {
             val d = navKeyLabel(k)
@@ -1152,7 +1258,7 @@ class VmActivity : ComponentActivity() {
         val alpha by androidx.compose.animation.core.animateFloatAsState(if (on) 1f else 0.08f,
             androidx.compose.animation.core.tween(if (on) 120 else 260), label = "led")
         val c = Color(0xff000000.toInt() or (l.color and 0xffffff))
-        val sony = vm.img.skin.contains("Xperia", true) || vm.img.brand.contains("Sony", true)
+        val sony = vm?.img?.skin?.contains("Xperia", true) == true || vm?.img?.brand?.contains("Sony", true) == true
         val density = androidx.compose.ui.platform.LocalDensity.current
         val y = with(density) { (guestTopPx.toDp() - 10.dp).coerceAtLeast(4.dp) }
         if (sony) {
@@ -1193,17 +1299,17 @@ class VmActivity : ComponentActivity() {
                 if (state == GuestVm.State.FAILED) {
                     Text(stringResource(R.string.failed_start), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
-                    Text(vm.failure ?: "", fontSize = 14.sp, color = MiuixTheme.colorScheme.error)
+                    Text(session.failure ?: "", fontSize = 14.sp, color = MiuixTheme.colorScheme.error)
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(text = stringResource(R.string.close), onClick = { stopVm() })
-                        Button(onClick = { thread { vm.stop(); vm.boot() } }) { Text(stringResource(R.string.retry)) }
+                        Button(onClick = { rebootVm() }) { Text(stringResource(R.string.retry)) }
                     }
                 } else {
                     CircularProgressIndicator(size = 64.dp)
                     Spacer(Modifier.height(16.dp))
-                    Text(vm.img.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(vm.img.displayVersion, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+                    Text(session.title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(session.subtitle, fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
                     Spacer(Modifier.height(12.dp))
                     val phase = when (state) {
                         GuestVm.State.PREPARING -> stringResource(R.string.st_preparing)
@@ -1212,7 +1318,7 @@ class VmActivity : ComponentActivity() {
                         else -> "…"
                     }
                     Text(phase, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.primary)
-                    if (vm.img.bootCount == 0 && state == GuestVm.State.BOOTING) {
+                    if (vm?.img?.bootCount == 0 && state == GuestVm.State.BOOTING) {
                         Spacer(Modifier.height(6.dp))
                         Text(stringResource(R.string.first_boot_hint),
                             fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
@@ -1231,8 +1337,7 @@ class VmActivity : ComponentActivity() {
         val guestLines = remember { mutableStateListOf<String>() }
         LaunchedEffect(guestTab) {
             while (guestTab) {
-                val recs = GuestLog.tail(vm.paths.root, 128 * 1024).takeLast(300)
-                guestLines.clear(); guestLines.addAll(recs.map { "${it.prio} ${it.tag}: ${it.msg}" })
+                guestLines.clear(); guestLines.addAll(session.guestLog())
                 delay(1500)
             }
         }
@@ -1244,7 +1349,7 @@ class VmActivity : ComponentActivity() {
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     PanelIconButton(Icons.Rounded.ContentCopy, stringResource(R.string.log_copy)) { copyLog(list.toList()) }
                     PanelIconButton(Icons.Rounded.Download, stringResource(R.string.log_export)) {
-                        pendingExport = list.toList(); exportLog.launch("aemu-${vm.img.id}-${if (guestTab) "logcat" else "host"}.log")
+                        pendingExport = list.toList(); exportLog.launch("aemu-${session.id}-${if (guestTab) "logcat" else "host"}.log")
                     }
                     PanelIconButton(Icons.Rounded.Close, stringResource(R.string.close), filled = true) { onClose() }
                 }
@@ -1293,7 +1398,7 @@ class VmActivity : ComponentActivity() {
             termLines.add("$ $c")
             busy = true
             thread {
-                val out = runCatching { vm.guestShell(c, 180_000) }.getOrElse { it.toString() }
+                val out = runCatching { vm?.guestShell(c, 180_000) ?: "" }.getOrElse { it.toString() }
                 runOnUiThread {
                     termLines.addAll(out.trimEnd('\n').lines())
                     while (termLines.size > 3000) termLines.removeAt(0)
@@ -1392,10 +1497,17 @@ class VmActivity : ComponentActivity() {
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_RECOVERY = "recovery"
+        /** an OpenHarmony space: the same page, driven by OhSession instead of core/GuestVm */
+        const val EXTRA_OH_SPACE = "space"
         /** how long after returning the screen is checked for frames (see [postResumeCheck]) */
         private const val RESUME_CHECK_MS = 8_000L
         fun start(ctx: Context, id: String, recovery: Boolean = false) {
             ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        /** Open an OpenHarmony space on the operating page (the emulator page's cards do). */
+        fun startOh(ctx: Context, spaceId: String) {
+            ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_OH_SPACE, spaceId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }

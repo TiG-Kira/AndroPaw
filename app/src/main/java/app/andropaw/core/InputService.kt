@@ -13,7 +13,7 @@ import java.util.concurrent.LinkedBlockingQueue
  * input.sock, а мы пишем туда сырые struct input_event (32-битные: sec, usec, type, code, value).
  * Мультитач — протокол A (SYN_MT_REPORT) с TRACKING_ID: его понимают и 2.3, и 4.x.
  */
-class InputService(private val paths: VmPaths, private val log: (String) -> Unit) {
+class InputService(private val paths: VmPaths, private val log: (String) -> Unit) : MachineInput {
 
     data class P(val id: Int, val x: Int, val y: Int)
 
@@ -159,14 +159,14 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
         flush(b)
     }
 
-    fun key(code: Int, down: Boolean) {
+    override fun key(code: Int, down: Boolean) {
         val b = ByteBuffer.allocate(2 * EV).order(ByteOrder.LITTLE_ENDIAN)
         put(b, EV_KEY, code, if (down) 1 else 0)
         put(b, EV_SYN, SYN_REPORT, 0)
         synchronized(this) { flush(b) }
     }
 
-    fun press(code: Int, holdMs: Long = 80) {
+    override fun press(code: Int, holdMs: Long) {
         Thread {
             key(code, true)
             Thread.sleep(holdMs)
@@ -174,7 +174,7 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
         }.start()
     }
 
-    fun home(down: Boolean) {
+    override fun home(down: Boolean) {
         // One key only: 102 and 172 both map to HOME (TreeFixer), and the second down while the first is held reads
         // as a key repeat, i.e. a long press: TouchWiz 4 opened recents on every tap of Home
         key(KEY_HOME, down)
@@ -184,7 +184,7 @@ class InputService(private val paths: VmPaths, private val log: (String) -> Unit
      * Recent apps. Handles AOSP (APP_SWITCH 580/187), MIUI (Menu on hardware keys),
      * TouchWiz (Galaxy S5 recents key 254 / S3-S4 long Home chord), HTC Sense, and Sony Xperia.
      */
-    fun recents(api: Int, skin: String) {
+    override fun recents(api: Int, skin: String) {
         Thread {
             when {
                 skin.contains("MIUI", true) && api < 21 -> {
