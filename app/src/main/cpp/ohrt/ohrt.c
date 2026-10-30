@@ -92,6 +92,10 @@ static pthread_t g_api_thread;
 static int g_api_up = 0;
 static char g_run_dir[256] = "";
 static char g_log_path[320] = "";
+/* the guest's own stdout/stderr: an init that refuses to run says why there, and nowhere else */
+static char g_guest_console[320] = "";
+/* the last thing the guest's init complained about, handed to Java with EV_GUEST_EXIT */
+static char g_guest_error[300] = "";
 static ANativeWindow *g_window = NULL;
 static char g_version[64] = "ohrt 0.1 built-in";
 
@@ -941,6 +945,18 @@ static uint32_t gpu_fps_fix(uint32_t fps) {
     return (fps == 30 || fps == 60 || fps == 90 || fps == 120) ? fps : 60;
 }
 
+/* A renderer that died with the app leaves its listening sockets on disk, and the next bind()
+ * fails with EADDRINUSE — "Mesa Error The errno is Address already in use (os error 98)" — which
+ * quietly demotes every later boot to the software path. Clear them before starting. */
+static void gpu_unlink_stale(const char *dir) {
+    static const char *names[] = { "command.sock", "gles.sock" };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char p[340];
+        snprintf(p, sizeof(p), "%s/%s", dir, names[i]);
+        if (unlink(p) == 0) rlog("gpu: removed stale socket %s", p);
+    }
+}
+
 /* Start the rutabaga host side; safe to call when already up. */
 static int gpu_boot(const char *rootfs, uint32_t w, uint32_t h, uint32_t dpi, uint32_t fps) {
     pthread_mutex_lock(&g_gpu_lock);
@@ -973,14 +989,26 @@ static int gpu_boot(const char *rootfs, uint32_t w, uint32_t h, uint32_t dpi, ui
     c.h = h;
     c.dpi = dpi;
     c.fps = gpu_fps_fix(fps);
+    /* nothing is up (we checked above), so anything still lying in the socket dir is a corpse */
+    gpu_unlink_stale(dir);
     int rc = g_gpu_start(&c);
     if (rc != 0) {
         char err[256] = "";
         if (g_gpu_readerr) g_gpu_readerr(err, sizeof(err));
-        rlog("gpu: renderer Start() rejected the config (rc=%d)%s%s", rc,
-             err[0] ? ": " : "", err);
-        pthread_mutex_unlock(&g_gpu_lock);
-        return -1;
+        if (strstr(err, "already in use") || strstr(err, "os error 98")) {
+            /* a socket the unlink above could not take (or a race with the previous renderer) */
+            gpu_unlink_stale(dir);
+            memset(err, 0, sizeof(err));
+            rc = g_gpu_start(&c);
+            if (rc == 0) rlog("gpu: pass-through recovered after clearing %s", dir);
+        }
+        if (rc != 0) {
+            if (g_gpu_readerr) g_gpu_readerr(err, sizeof(err));
+            rlog("gpu: renderer Start() rejected the config (rc=%d)%s%s", rc,
+                 err[0] ? ": " : "", err);
+            pthread_mutex_unlock(&g_gpu_lock);
+            return -1;
+        }
     }
     g_gpu_up = 1;
     pthread_mutex_unlock(&g_gpu_lock);
@@ -1016,6 +1044,7 @@ static void gpu_halt(void) {
  */
 static pthread_t g_wait_thread;
 static int g_wait_up = 0;
+static void console_finish(void);   /* defined below: the supervisor flushes the console first */
 
 static void *wait_thread_fn(void *arg) {
     (void)arg;
@@ -1023,11 +1052,22 @@ static void *wait_thread_fn(void *arg) {
     int status = 0;
     pid_t r;
     do { r = waitpid(pid, &status, 0); } while (r < 0 && errno == EINTR);
+    /* drain what the guest wrote on its way out before reporting its death: the reason an
+     * init gave up is the last line it printed, and it is more useful than the code alone */
+    console_finish();
     if (g_stopping) return NULL;
     if (r == pid) {
-        if (WIFSIGNALED(status)) rlog("guest %d killed by signal %d", (int)pid, WTERMSIG(status));
-        else rlog("guest %d exited with code %d", (int)pid, WEXITSTATUS(status));
-        oh_event(EV_GUEST_EXIT, (long)status, NULL);
+        if (WIFSIGNALED(status)) {
+            rlog("guest %d killed by signal %d", (int)pid, WTERMSIG(status));
+        } else {
+            int code = WEXITSTATUS(status);
+            rlog("guest %d exited with code %d", (int)pid, code);
+            if (code == 78 && !g_guest_error[0])
+                rlog("hint: 78 = the guest init was missing its runtime context (OHSPACE_ROOT / OHSPACE_LOADER)");
+            else if (code == 127)
+                rlog("hint: 127 = the guest binary or its loader could not be executed from the rootfs");
+        }
+        oh_event(EV_GUEST_EXIT, (long)status, g_guest_error[0] ? g_guest_error : NULL);
     }
     return NULL;
 }
@@ -1041,6 +1081,105 @@ static void wait_stop(void) {
     if (!g_wait_up) return;
     pthread_join(g_wait_thread, NULL);
     g_wait_up = 0;
+}
+
+/* ------------------------------------------------------ guest console */
+/*
+ * The OpenHarmony runtime this app ships is a container build: its init prints structured
+ * lines on its console ("OHSPACE_INIT_START pid=… page_size=…", "OHSPACE_INIT_FAILED <why>")
+ * and gives up with 78 when it is missing runtime context. None of that used to reach the UI,
+ * because the child inherited an app's stdio — i.e. /dev/null — so a space that died on its
+ * first instruction was indistinguishable from one that had crashed deep inside the guest.
+ * The console is a file now, and its lines are read back into the log panel as they appear.
+ */
+static pthread_t g_console_thread;
+static int g_console_up = 0;
+static volatile int g_console_stop = 0;
+static int g_console_lines = 0;      /* per-boot budget: an init in a loop must not flood the UI */
+
+static void console_line(const char *line) {
+    const char *p;
+    if (!strncmp(line, "OHSPACE_INIT_FAILED", 19)) {
+        p = line + 19;
+        while (*p == ' ') p++;
+        snprintf(g_guest_error, sizeof(g_guest_error), "%s", p);
+        rlog("guest init refused: %s", p);
+        return;
+    }
+    if (!strncmp(line, "OHSPACE_INIT_START", 18)) {
+        rlog("guest init: started (%s)", line);
+        return;
+    }
+    if (!strncmp(line, "OHSPACE_INIT_LOG", 16)) {
+        p = line + 16;
+        while (*p == ' ') p++;
+        rlog("guest: %s", p);
+        return;
+    }
+    if (strstr(line, "OHSPACE_INIT_FAILED")) {
+        /* the marker can be embedded in a longer line (init prefixes its tag sometimes) */
+        snprintf(g_guest_error, sizeof(g_guest_error), "%s", strstr(line, "OHSPACE_INIT_FAILED") + 19);
+        rlog("guest init refused: %s", g_guest_error);
+        return;
+    }
+    rlog("guest: %s", line);
+}
+
+static void *console_thread_fn(void *arg) {
+    (void)arg;
+    if (!g_guest_console[0]) return NULL;
+    FILE *f = NULL;
+    for (;;) {
+        if (!f) {
+            f = fopen(g_guest_console, "r");
+            if (!f) {
+                if (g_console_stop) break;
+                usleep(120 * 1000);
+                continue;
+            }
+        }
+        char buf[900];
+        int got = 0;
+        while (fgets(buf, sizeof(buf), f)) {
+            got = 1;
+            size_t n = strlen(buf);
+            while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
+            if (n == 0) continue;
+            if (g_console_lines >= 300) {
+                if (g_console_lines == 300) {
+                    rlog("guest: console is chatty — further lines stay in guest-console.log");
+                    g_console_lines++;
+                }
+                continue;
+            }
+            g_console_lines++;
+            console_line(buf);
+        }
+        clearerr(f);                 /* the guest is still appending: no EOF, just no data yet */
+        if (g_console_stop) {
+            if (!got) break;         /* drained */
+            continue;
+        }
+        if (!got) usleep(180 * 1000);
+    }
+    if (f) fclose(f);
+    return NULL;
+}
+
+static void console_start(void) {
+    g_console_stop = 0;
+    g_console_lines = 0;
+    g_guest_error[0] = 0;
+    if (!g_guest_console[0]) return;
+    if (pthread_create(&g_console_thread, NULL, console_thread_fn, NULL) == 0) g_console_up = 1;
+}
+
+/* Stop the tailer and let it flush whatever the guest wrote on its way out. */
+static void console_finish(void) {
+    if (!g_console_up) return;
+    g_console_stop = 1;
+    pthread_join(g_console_thread, NULL);
+    g_console_up = 0;
 }
 
 /* ------------------------------------------------------------- guest boot */
@@ -1108,12 +1247,14 @@ static void guest_path_of(const char *rootfs, const char *exec_abs, char *out, s
  * its first job.
  */
 static int spawn_guest_virt(const char *rootfs, const char *runner, const char *exec_guest,
-                            const char *host_sock, const char *data_dir) {
+                            const char *loader_guest, const char *host_sock, const char *data_dir) {
     char tmpdir[300];
     snprintf(tmpdir, sizeof(tmpdir), "%s/tmp", data_dir);
     mkdirs_deep(tmpdir);
+    snprintf(g_guest_console, sizeof(g_guest_console), "%s/guest-console.log", data_dir);
 
     static char e_root[600], e_api[600], e_tmp[400], e_ld[900];
+    static char e_osroot[600], e_osld[600];
     char *envp[16];
     int e = 0;
     snprintf(e_root, sizeof(e_root), "AEMU64_ROOT=%s", rootfs);
@@ -1121,10 +1262,21 @@ static int spawn_guest_virt(const char *rootfs, const char *runner, const char *
     snprintf(e_tmp, sizeof(e_tmp), "TMPDIR=%s", tmpdir);
     /* the guest's own files are owned by the app's uid; the guest must see them as root's */
     snprintf(e_ld, sizeof(e_ld), "LD_LIBRARY_PATH=/system/lib64:/system/lib");
+    /* The runtime package is a container build: its init refuses to run unless it is told the
+     * container root and the loader to re-exec, and otherwise prints
+     * "OHSPACE_INIT_FAILED missing runtime context" and returns 78 (EX_CONFIG). Both were
+     * missing, so every OpenHarmony space died on its first instruction — after the runner had
+     * already been given the guest, which is why it looked like a guest crash and not a config
+     * error. OHSPACE_ROOT must be an absolute host path (the guest libs test for a leading '/'). */
+    snprintf(e_osroot, sizeof(e_osroot), "OHSPACE_ROOT=%s", rootfs);
+    snprintf(e_osld, sizeof(e_osld), "OHSPACE_LOADER=%s",
+             (loader_guest && loader_guest[0]) ? loader_guest : exec_guest);
     envp[e++] = e_root;
     envp[e++] = e_api;
     envp[e++] = e_tmp;
     envp[e++] = e_ld;
+    envp[e++] = e_osroot;
+    envp[e++] = e_osld;
     envp[e++] = (char *)"AEMU64_ID=0,0";
     envp[e++] = (char *)"PATH=/system/bin:/bin:/sbin:/usr/bin";
     envp[e++] = (char *)"HOME=/root";
@@ -1147,6 +1299,15 @@ static int spawn_guest_virt(const char *rootfs, const char *runner, const char *
         sigemptyset(&mask);
         sigprocmask(SIG_SETMASK, &mask, NULL);
         chdir(data_dir);
+        /* The guest used to inherit the app's stdio, which on Android points at /dev/null —
+         * so an init that refused to start took its reason with it and the panel only ever
+         * showed the exit code. Give it a file we can read back. */
+        int cfd = open(g_guest_console, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (cfd >= 0) {
+            dup2(cfd, STDOUT_FILENO);
+            dup2(cfd, STDERR_FILENO);
+            if (cfd > STDERR_FILENO) close(cfd);
+        }
         execve(runner, argv, envp);
         LOGE("execve %s failed: %s", runner, strerror(errno));
         _exit(127);
@@ -1154,30 +1315,38 @@ static int spawn_guest_virt(const char *rootfs, const char *runner, const char *
     return (int)pid;
 }
 
-static int spawn_guest(const char *rootfs, const char *loader, const char *exec,
-                       const char *host_sock, const char *data_dir) {
+static int spawn_guest(const char *rootfs, const char *loader, const char *loader_guest,
+                       const char *exec, const char *host_sock, const char *data_dir) {
     char libpath[768];
     snprintf(libpath, sizeof(libpath), "%s/lib:%s/system/lib64:%s/system/lib:%s",
              loader ? loader : "", rootfs, rootfs, rootfs);
     char tmpdir[300];
     snprintf(tmpdir, sizeof(tmpdir), "%s/tmp", data_dir);
     mkdirs_deep(tmpdir);
+    snprintf(g_guest_console, sizeof(g_guest_console), "%s/guest-console.log", data_dir);
 
     char *envp[16];
     int e = 0;
     char e_root[600], e_exec[128], e_loader[600], e_api[600], e_lp[900], e_tmp[400];
+    static char e_osroot[600], e_osld[600];
     snprintf(e_root, sizeof(e_root), "OHRT_ROOT=%s", rootfs);
     snprintf(e_exec, sizeof(e_exec), "OHRT_EXEC=%s", exec);
     snprintf(e_loader, sizeof(e_loader), "OHRT_LOADER=%s", loader ? loader : "");
     snprintf(e_api, sizeof(e_api), "OHRT_HOST_API=%s", host_sock);
     snprintf(e_lp, sizeof(e_lp), "LD_LIBRARY_PATH=%s", libpath);
     snprintf(e_tmp, sizeof(e_tmp), "TMPDIR=%s", tmpdir);
+    /* same runtime context the aemu64 path needs — the container build's init checks both */
+    snprintf(e_osroot, sizeof(e_osroot), "OHSPACE_ROOT=%s", rootfs);
+    snprintf(e_osld, sizeof(e_osld), "OHSPACE_LOADER=%s",
+             (loader_guest && loader_guest[0]) ? loader_guest : exec);
     envp[e++] = e_root;
     envp[e++] = e_exec;
     envp[e++] = e_loader;
     envp[e++] = e_api;
     envp[e++] = e_lp;
     envp[e++] = e_tmp;
+    envp[e++] = e_osroot;
+    envp[e++] = e_osld;
     envp[e++] = (char *)"PATH=/system/bin:/bin:/sbin:/usr/bin";
     envp[e++] = (char *)"HOME=/root";
     envp[e] = NULL;
@@ -1199,6 +1368,12 @@ static int spawn_guest(const char *rootfs, const char *loader, const char *exec,
         sigemptyset(&mask);
         sigprocmask(SIG_SETMASK, &mask, NULL);
         chdir(data_dir);
+        int cfd = open(g_guest_console, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (cfd >= 0) {
+            dup2(cfd, STDOUT_FILENO);
+            dup2(cfd, STDERR_FILENO);
+            if (cfd > STDERR_FILENO) close(cfd);
+        }
         execve(loader, argv, envp);
         LOGE("execve %s failed: %s", loader, strerror(errno));
         _exit(127);
@@ -1355,15 +1530,20 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
     /* 3. spawn the guest */
     g_stopping = 0;
     const char *sock = host_sock[0] ? host_sock : "/dev/null";
+    char loader_guest[400] = "";
+    if (have_loader) guest_path_of(rootfs, loader_abs, loader_guest, sizeof(loader_guest));
+    if (data_dir[0])
+        snprintf(g_guest_console, sizeof(g_guest_console), "%s/guest-console.log", data_dir);
+    g_guest_error[0] = 0;
     int pid = -1;
     if (runner[0] && is_file(runner)) {
         /* the guest keeps its own path names: /system, /data and /dev are its own directories */
-        pid = spawn_guest_virt(rootfs, runner, exec_guest, sock, data_dir);
+        pid = spawn_guest_virt(rootfs, runner, exec_guest, loader_guest, sock, data_dir);
         if (pid > 0) rlog("guest pid %d: %s via runner %s (guest root /)", pid, exec_guest, runner);
         else rlog("runner %s could not take %s, falling back to the musl loader", runner, exec_guest);
     }
     if (pid <= 0 && have_loader) {
-        pid = spawn_guest(rootfs, loader_abs, exec_abs, sock, data_dir);
+        pid = spawn_guest(rootfs, loader_abs, loader_guest, exec_abs, sock, data_dir);
         if (pid > 0) rlog("guest pid %d: %s (loader %s)", pid, exec_abs, loader_abs);
     }
     if (pid <= 0) {
@@ -1374,6 +1554,7 @@ static jint oh_start(JNIEnv *env, jclass cls, jstring cfg) {
         return -5;
     }
     g_child = pid;
+    console_start();
     __atomic_store_n(&g_frames, 0, __ATOMIC_RELAXED);
     /* 4. bridges: connect to the guest's display.sock / input.sock once they listen */
     display_start(rootfs);
@@ -1418,6 +1599,7 @@ static jint oh_stop(JNIEnv *env, jclass cls) {
     }
     pthread_mutex_unlock(&g_lock);
     wait_stop();
+    console_finish();
     api_stop();
     display_stop();
     input_stop();

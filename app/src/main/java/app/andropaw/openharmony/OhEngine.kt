@@ -149,8 +149,12 @@ object OhEngine {
             EV_GUEST_EXIT -> {
                 val what = if (arg > 0 && arg and 0x7f != 0L) "killed by signal ${arg and 0x7f}"
                     else "exited with code ${(arg shr 8) and 0xff}"
-                failure = "the OpenHarmony guest ${what}"
-                addLine("${stamp()} ✖ guest ${what} — the space stopped")
+                // the runner passes on what the guest's init printed as it gave up — the actual
+                // reason ("missing runtime context", …), which beats a bare exit code
+                val why = msg?.takeIf { it.isNotBlank() }
+                failure = "the OpenHarmony guest $what" + if (why != null) "\n$why" else ""
+                addLine("${stamp()} ✖ guest $what — the space stopped")
+                if (why != null) addLine("${stamp()} ✖ $why")
                 setState(State.FAILED)
             }
             EV_INPUT_UP -> addLine("${stamp()} input: bridge connected — touch and keys enabled")
