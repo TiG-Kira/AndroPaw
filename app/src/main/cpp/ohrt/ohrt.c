@@ -1045,6 +1045,7 @@ static void gpu_halt(void) {
 static pthread_t g_wait_thread;
 static int g_wait_up = 0;
 static void console_finish(void);   /* defined below: the supervisor flushes the console first */
+static void ring_best(char *out, size_t outsz);   /* defined with the console: the guest's own words */
 
 static void *wait_thread_fn(void *arg) {
     (void)arg;
@@ -1057,6 +1058,7 @@ static void *wait_thread_fn(void *arg) {
     console_finish();
     if (g_stopping) return NULL;
     if (r == pid) {
+        char why[256] = "";
         if (WIFSIGNALED(status)) {
             rlog("guest %d killed by signal %d", (int)pid, WTERMSIG(status));
         } else {
@@ -1066,8 +1068,14 @@ static void *wait_thread_fn(void *arg) {
                 rlog("hint: 78 = the guest init was missing its runtime context (OHSPACE_ROOT / OHSPACE_LOADER)");
             else if (code == 127)
                 rlog("hint: 127 = the guest binary or its loader could not be executed from the rootfs");
+            else if (code == 70)
+                rlog("hint: 70 = OpenHarmony's init panicked: it re-executes the system on a fatal "
+                     "boot error, and in a container that becomes an exit — usually a critical "
+                     "service that never came up");
         }
-        oh_event(EV_GUEST_EXIT, (long)status, g_guest_error[0] ? g_guest_error : NULL);
+        /* what the guest said on its way out beats the code alone */
+        if (!g_guest_error[0]) ring_best(why, sizeof(why));
+        oh_event(EV_GUEST_EXIT, (long)status, g_guest_error[0] ? g_guest_error : (why[0] ? why : NULL));
     }
     return NULL;
 }
@@ -1097,8 +1105,96 @@ static int g_console_up = 0;
 static volatile int g_console_stop = 0;
 static int g_console_lines = 0;      /* per-boot budget: an init in a loop must not flood the UI */
 
+/*
+ * One broken facility is reported once per service: an OpenHarmony init that cannot hand out
+ * access-token ids prints "[init_service.c:338]gettotkenid failed, service 'x'" for all ~150
+ * of them, and that wall of text is what pushed the actual fatal line past the budget. Lines
+ * are therefore rate-limited per source location — first few go through, the rest are held in
+ * a ring and replayed when the guest dies, which is when they are the only evidence left.
+ */
+#define CON_CAT_MAX   64
+#define CON_CAT_PER   3
+#define CON_RING      64
+#define CON_RING_TAIL 12
+static char g_cat_key[CON_CAT_MAX][28];
+static int  g_cat_count[CON_CAT_MAX];
+static int  g_cat_used = 0;
+static char g_ring[CON_RING][256];
+static int  g_ring_pos = 0;
+static int  g_ring_len = 0;
+
+/* "[init_service.c:338]gettotkenid failed, service ' x '" -> "init_service.c:338" */
+static int console_key(const char *line, char *out, size_t outsz) {
+    const char *a = strchr(line, '[');
+    if (!a) return 0;
+    const char *b = strchr(a + 1, ']');
+    if (!b || b - a < 4 || b - a > 40) return 0;
+    const char *colon = NULL;
+    for (const char *p = a + 1; p < b; p++) if (*p == ':') colon = p;
+    if (!colon || b - colon < 2 || b - colon > 6) return 0;
+    for (const char *p = colon + 1; p < b; p++) if (*p < '0' || *p > '9') return 0;
+    size_t n = (size_t)(b - (a + 1));
+    if (n >= outsz) n = outsz - 1;
+    memcpy(out, a + 1, n);
+    out[n] = 0;
+    return 1;
+}
+
+/* true while this (file, line) pair is still under its quota */
+static int console_allowed(const char *key) {
+    for (int i = 0; i < g_cat_used; i++) {
+        if (!strcmp(g_cat_key[i], key)) {
+            if (g_cat_count[i] >= CON_CAT_PER) return 0;
+            g_cat_count[i]++;
+            return 1;
+        }
+    }
+    if (g_cat_used < CON_CAT_MAX) {
+        snprintf(g_cat_key[g_cat_used], sizeof(g_cat_key[0]), "%s", key);
+        g_cat_count[g_cat_used] = 1;
+        g_cat_used++;
+    }
+    return 1;
+}
+
+static void ring_push(const char *line) {
+    snprintf(g_ring[g_ring_pos], sizeof(g_ring[0]), "%s", line);
+    g_ring_pos = (g_ring_pos + 1) % CON_RING;
+    if (g_ring_len < CON_RING) g_ring_len++;
+}
+
+/* The last lines are the only place a dying init explains itself — replay them, held-back
+ * ones included, when the guest is gone. */
+static void ring_flush(void) {
+    int n = g_ring_len < CON_RING_TAIL ? g_ring_len : CON_RING_TAIL;
+    if (n <= 0) return;
+    rlog("guest: --- last %d console lines before it exited ---", n);
+    int start = (g_ring_pos - n + CON_RING) % CON_RING;
+    for (int i = 0; i < n; i++) rlog("guest: %s", g_ring[(start + i) % CON_RING]);
+}
+
+/* The most explanatory line the guest printed, for the failure dialog. */
+static void ring_best(char *out, size_t outsz) {
+    static const char *pat[] = { "startup_failed", "panic", "critical", "failed", "error" };
+    static const char *skip[] = { "gettotkenid failed" };
+    for (size_t k = 0; k < sizeof(pat) / sizeof(pat[0]); k++) {
+        for (int i = 0; i < g_ring_len; i++) {
+            int idx = (g_ring_pos - 1 - i + 2 * CON_RING) % CON_RING;
+            const char *l = g_ring[idx];
+            if (!strcasestr(l, pat[k])) continue;
+            int skipped = 0;
+            for (size_t s = 0; s < sizeof(skip) / sizeof(skip[0]); s++)
+                if (strcasestr(l, skip[s])) skipped = 1;
+            if (skipped) continue;
+            snprintf(out, outsz, "%s", l);
+            return;
+        }
+    }
+}
+
 static void console_line(const char *line) {
     const char *p;
+    ring_push(line);
     if (!strncmp(line, "OHSPACE_INIT_FAILED", 19)) {
         p = line + 19;
         while (*p == ' ') p++;
@@ -1122,6 +1218,9 @@ static void console_line(const char *line) {
         rlog("guest init refused: %s", g_guest_error);
         return;
     }
+    /* the same failure reported for every service stays out of the panel after the first few */
+    char key[28];
+    if (console_key(line, key, sizeof(key)) && !console_allowed(key)) return;
     rlog("guest: %s", line);
 }
 
@@ -1145,8 +1244,8 @@ static void *console_thread_fn(void *arg) {
             size_t n = strlen(buf);
             while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
             if (n == 0) continue;
-            if (g_console_lines >= 300) {
-                if (g_console_lines == 300) {
+            if (g_console_lines >= 1500) {
+                if (g_console_lines == 1500) {
                     rlog("guest: console is chatty — further lines stay in guest-console.log");
                     g_console_lines++;
                 }
@@ -1170,6 +1269,9 @@ static void console_start(void) {
     g_console_stop = 0;
     g_console_lines = 0;
     g_guest_error[0] = 0;
+    g_cat_used = 0;
+    g_ring_pos = 0;
+    g_ring_len = 0;
     if (!g_guest_console[0]) return;
     if (pthread_create(&g_console_thread, NULL, console_thread_fn, NULL) == 0) g_console_up = 1;
 }
@@ -1180,6 +1282,7 @@ static void console_finish(void) {
     g_console_stop = 1;
     pthread_join(g_console_thread, NULL);
     g_console_up = 0;
+    if (!g_stopping) ring_flush();   /* a stop is not a death: no need to replay its tail */
 }
 
 /* ------------------------------------------------------------- guest boot */

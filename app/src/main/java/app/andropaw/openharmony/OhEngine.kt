@@ -39,6 +39,21 @@ object OhEngine {
     const val KEY_BACK = 6
     const val KEY_HOME = 7
 
+    /*
+     * The OpenHarmony counterpart of core/GuestVm's supervisor.
+     *
+     * An OpenHarmony space dies as a whole: when its init goes there is nothing left to reap, and
+     * init's own "reboot" (ExecReboot in init_reboot.c) cannot reboot a container, so it surfaces
+     * as an exit code. Android answers the same situation by recycling the guest and running the
+     * boot plan again; here the equivalent is to tear the run down with ohStop() and start it
+     * over. The limits are the ones the Android side already uses — three rebuilds while the
+     * space has never reached its UI, six once it has — because a space that keeps dying after
+     * boot is a different problem from one that never boots.
+     */
+    private const val RESTARTS_BEFORE_BOOT = 3
+    private const val RESTARTS_AFTER_BOOT = 6
+    private const val RESTART_BACKOFF_MS = 1500L
+
     class OhException(message: String) : Exception(message)
 
     /** The native entry every OpenHarmony runtime package must implement. */
@@ -78,6 +93,15 @@ object OhEngine {
     /** the app context of the running space, for the home page's "running" marker */
     @Volatile private var hostCtx: android.content.Context? = null
     @Volatile private var beatThread: Thread? = null
+
+    /* what the supervisor needs to run the boot again without the activity's help */
+    @Volatile private var lastCtx: Context? = null
+    @Volatile private var lastSpace: OhSpace? = null
+    @Volatile private var lastRuntimeDir: File? = null
+    @Volatile private var restarts = 0
+    @Volatile private var everBooted = false
+    @Volatile private var haltRequested = false
+    @Volatile private var restarting = false
 
     private fun setState(s: State) {
         state = s
@@ -140,21 +164,28 @@ object OhEngine {
             EV_LOG -> addLine(msg ?: return)
             EV_DISPLAY_UP -> {
                 addLine("${stamp()} display: bridge connected — the guest's composer is publishing frames")
+                everBooted = true
                 if (state == State.BOOTING || state == State.PREPARING) setState(State.RUNNING)
             }
             EV_FIRST_FRAME -> {
                 addLine("${stamp()} display: first frame on screen")
+                everBooted = true
                 if (state != State.RUNNING) setState(State.RUNNING)
             }
             EV_GUEST_EXIT -> {
-                val what = if (arg > 0 && arg and 0x7f != 0L) "killed by signal ${arg and 0x7f}"
-                    else "exited with code ${(arg shr 8) and 0xff}"
+                val signalled = arg > 0 && arg and 0x7f != 0L
+                val code = ((arg shr 8) and 0xff).toInt()
+                val what = if (signalled) "killed by signal ${arg and 0x7f}" else "exited with code $code"
                 // the runner passes on what the guest's init printed as it gave up — the actual
                 // reason ("missing runtime context", …), which beats a bare exit code
                 val why = msg?.takeIf { it.isNotBlank() }
-                failure = "the OpenHarmony guest $what" + if (why != null) "\n$why" else ""
-                addLine("${stamp()} ✖ guest $what — the space stopped")
+                addLine("${stamp()} ✖ guest $what")
                 if (why != null) addLine("${stamp()} ✖ $why")
+                if (haltRequested) return
+                if (scheduleRestart(what, why)) return
+                failure = "the OpenHarmony guest $what" +
+                    (if (why != null) "\n$why" else "") +
+                    (if (!signalled && code == 70) "\nthe guest's init panicked — a critical service never came up" else "")
                 setState(State.FAILED)
             }
             EV_INPUT_UP -> addLine("${stamp()} input: bridge connected — touch and keys enabled")
@@ -191,12 +222,30 @@ object OhEngine {
             if (runningSpaceId == space.id) return
             stop()
         }
+        haltRequested = false
+        restarts = 0
+        everBooted = false
+        lastCtx = ctx
+        lastSpace = space
+        lastRuntimeDir = runtimeDir
+        if (surface != null) pendingSurface = surface
+        launch()
+    }
+
+    /**
+     * One boot: the body [start] runs for the user and [scheduleRestart] runs again after the
+     * guest died. Everything it needs was captured by [start], so a restart needs no activity.
+     */
+    @Synchronized
+    private fun launch() {
+        val ctx = lastCtx ?: return
+        val space = lastSpace ?: return
+        val runtimeDir = lastRuntimeDir ?: return
         failure = null
         bootAt = System.currentTimeMillis()
         hostCtx = ctx
         setState(State.PREPARING)
         startBeat()
-        if (surface != null) pendingSurface = surface
         try {
             val manifest = File(runtimeDir, "runtime.json")
             if (!manifest.isFile) throw OhException("runtime ${runtimeDir.name} is not installed")
@@ -290,6 +339,52 @@ object OhEngine {
             ?.filter { it.name.startsWith("libaemu64_") && it.name.endsWith(".so") && it.canExecute() }
             ?.maxByOrNull { it.name.removePrefix("libaemu64_").removeSuffix(".so").toIntOrNull() ?: 0 }
 
+    /**
+     * Recycle the space after the guest went away, the way the Android supervisor recycles a
+     * guest: tear the run down, drop the sockets the dead run left behind and boot again after a
+     * backoff that grows with the attempt. Returns false once the budget is spent — that is when
+     * the failure card is the honest answer.
+     */
+    private fun scheduleRestart(what: String, why: String?): Boolean {
+        if (restarting) return true
+        val limit = if (everBooted) RESTARTS_AFTER_BOOT else RESTARTS_BEFORE_BOOT
+        if (restarts >= limit) {
+            addLine("${stamp()} ✖ giving up after $restarts restart(s)")
+            return false
+        }
+        restarts++
+        restarting = true
+        val delay = RESTART_BACKOFF_MS * restarts
+        addLine("${stamp()} ↻ resetting the space and booting it again (${restarts}/$limit) in ${delay / 1000}s" +
+            (why?.let { " — $it" } ?: " — $what"))
+        setState(State.BOOTING)
+        Thread({
+            runCatching { Thread.sleep(delay) }
+            if (haltRequested) { restarting = false; return@Thread }
+            // the run is over in every way that matters: bridges closed, window released
+            runCatching { native.ohStop() }
+            clearRunState()
+            if (!haltRequested) {
+                runCatching { launch() }.onFailure {
+                    addLine("${stamp()} ✖ restart failed: ${it.message}")
+                    failure = it.message
+                    setState(State.FAILED)
+                }
+            }
+            restarting = false
+        }, "oh-restart").apply { isDaemon = true; start() }
+        return true
+    }
+
+    /** Sockets a dead run leaves behind: a stale one makes the next boot's bind fail. */
+    private fun clearRunState() {
+        val ctx = lastCtx ?: return
+        val space = lastSpace ?: return
+        val dir = OhSpaceStore.runDir(ctx, space.id)
+        listOf("host.sock", "command.sock", "gles.sock", "display.sock", "input.sock")
+            .forEach { runCatching { File(dir, it).delete() } }
+    }
+
     /** Attach the display surface of the current run (called from the activity's SurfaceView). */
     @Synchronized
     fun surface(surface: Surface?) {
@@ -320,6 +415,10 @@ object OhEngine {
 
     @Synchronized
     fun stop() {
+        // a restart that is waiting on its backoff must not resurrect a space the user closed
+        haltRequested = true
+        restarting = false
+        restarts = 0
         if (state == State.STOPPED) return
         runCatching { native.ohStop() }
         runningSpaceId = null
