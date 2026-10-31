@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Warning
@@ -118,7 +120,6 @@ import app.andropaw.core.GuestVm
 import app.andropaw.core.ImageStore
 import app.andropaw.core.InputService
 import app.andropaw.core.MachineSession
-import app.andropaw.openharmony.OhSession
 import kotlinx.coroutines.delay
 import kotlin.concurrent.thread
 import top.yukonga.miuix.kmp.basic.Button
@@ -135,18 +136,16 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.glass.GlassDropdownPopup
 import top.yukonga.miuix.kmp.glass.GlassPopupItem
 
-/** Процесс :vm держит ровно одну машину — Android или OpenHarmony. */
+/** Процесс :vm держит ровно одну машину. */
 object VmHost {
     @Volatile var session: MachineSession? = null
 }
 
 class VmActivity : ComponentActivity() {
-    /** the machine this page drives: an Android one (core/GuestVm) or an OpenHarmony space */
+    /** the machine this page drives: a core/GuestVm behind the session */
     private lateinit var session: MachineSession
-    /** the Android machine behind it, when it is one — adb, radio, shell, recovery are its own */
+    /** the Android machine behind it — adb, radio, shell, recovery are its own */
     private val vm: GuestVm? get() = session.android
-    /** the OpenHarmony space behind it, when it is one */
-    private val oh: OhSession? get() = session as? OhSession
     private lateinit var surfaceView: SurfaceView
     private var guest: GuestScreen? = null
     /** the guest's screen size, for what takes frames off it (VNC, recording) */
@@ -197,22 +196,8 @@ class VmActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // the overlay pads itself (status bar, navigation bar, keyboard): the terminal stays above the keyboard
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        val ohId = intent.getStringExtra(EXTRA_OH_SPACE)
         val cur = VmHost.session
-        if (ohId != null) {
-            // An OpenHarmony space: same page, same overlay, no Android behind it
-            val space = app.andropaw.openharmony.OhSpaceStore.get(this, ohId)
-            if (space == null) { finish(); return }
-            if (cur != null && (cur.id != space.id || cur.kind != MachineSession.Kind.OPENHARMONY) &&
-                cur.state != GuestVm.State.STOPPED) {
-                // в процессе уже живёт другая машина — её надо сначала остановить
-                cur.stop()
-                restartProcess(ohId, oh = true)
-                return
-            }
-            session = if (cur != null && cur.id == space.id && cur.kind == MachineSession.Kind.OPENHARMONY) cur
-                else app.andropaw.openharmony.OhSession(applicationContext, space).also { VmHost.session = it }
-        } else {
+        run {
             val id = intent.getStringExtra(EXTRA_ID)
             val curVm = cur?.android
             val img = ((if (id != null) ImageStore.get(this, id) else null) ?: curVm?.img)
@@ -256,26 +241,8 @@ class VmActivity : ComponentActivity() {
             override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { handSurface(h.surface) }
             override fun surfaceDestroyed(h: SurfaceHolder) { handSurface(null) }
         })
-        if (session.kind == MachineSession.Kind.OPENHARMONY) {
-            // the guest's own bridges (display.sock / input.sock) draw into this surface and take
-            // touches back out of it; there is no fb0 to copy frames from
-            surfaceView.setOnTouchListener { v, e ->
-                val idx = e.actionIndex
-                val action = when (e.actionMasked) {
-                    android.view.MotionEvent.ACTION_POINTER_DOWN -> android.view.MotionEvent.ACTION_DOWN
-                    android.view.MotionEvent.ACTION_POINTER_UP -> android.view.MotionEvent.ACTION_UP
-                    android.view.MotionEvent.ACTION_OUTSIDE -> android.view.MotionEvent.ACTION_CANCEL
-                    else -> e.actionMasked
-                }
-                val w = v.width.coerceAtLeast(1)
-                val ht = v.height.coerceAtLeast(1)
-                app.andropaw.openharmony.OhEngine.touch(action, e.getX(idx) / w, e.getY(idx) / ht, e.getPointerId(idx))
-                true
-            }
-        }
         guestW = gw; guestH = gh
-        // 5.0+ renders through the standalone glserverd into fb0 (see GuestVm.glUp), shown like the software path;
-        // OpenHarmony has no fb0 — its frames arrive through the display bridge, into the surface
+        // 5.0+ renders through the standalone glserverd into fb0 (see GuestVm.glUp), shown like the software path
         val direct = session.surfaceFixed
         if (direct) surfaceView.holder.setFixedSize(gw, gh)
         surfaceView.visibility = if (session.needsSurface) View.VISIBLE else View.GONE
@@ -538,18 +505,15 @@ class VmActivity : ComponentActivity() {
         thread { val out = runCatching { gvm.guestShell(cmd, 60_000) }.getOrElse { it.toString() }; done?.invoke(out) }
     }
 
-    /**
-     * Where screenshots and recordings land: a folder of the guest's shared card for an Android
-     * machine (so its gallery sees them), the space's own data folder for OpenHarmony.
-     */
+    /** Where screenshots and recordings land: a folder of the guest's shared card (its gallery sees them). */
     private fun mediaDir(sub: String): java.io.File? = vm?.let { gvm ->
         app.andropaw.core.Sdcard.hostDir(gvm.paths)?.let { java.io.File(it, sub) }
-    } ?: oh?.let { java.io.File(app.andropaw.openharmony.OhSpaceStore.dataDir(this, it.space.id), sub) }
+    }
 
-    /** The path shown to the user — the guest's own for Android, the host's for OpenHarmony. */
+    /** The path shown to the user — the guest's own. */
     private fun mediaPath(sub: String, name: String): String = vm?.let { gvm ->
         gvm.img.sdcardPath.trimEnd('/') + "/$sub/$name"
-    } ?: java.io.File(mediaDir(sub), name).absolutePath
+    } ?: name
 
     /** The guest's media scanner picks a new file up for its gallery — an Android thing. */
     private fun scanMedia(sub: String, name: String) {
@@ -634,7 +598,7 @@ class VmActivity : ComponentActivity() {
 
     /** VNC on/off. Each session gets a password of its own, shown here and in the log. */
     private fun toggleVnc() {
-        val gvm = vm ?: return          // an OpenHarmony space has no InputService to feed the pointer into
+        val gvm = vm ?: return          // no InputService to feed the pointer into
         vnc?.let { it.stop(); vnc = null; vncOn.value = false; return }
         if (guestW <= 0 || guestH <= 0) { toast(getString(R.string.m_failed)); return }
         val password = (1..8).map { "abcdefghijkmnpqrstuvwxyz23456789".random() }.joinToString("")
@@ -844,20 +808,18 @@ class VmActivity : ComponentActivity() {
 
     private fun rebootVm(recovery: Boolean = false) {
         val id = session.id
-        val ohSpace = session.kind == MachineSession.Kind.OPENHARMONY
         thread {
             session.stop()
             VmHost.session = null
-            // the GL bridge — and the OpenHarmony runner's own globals — cannot come up twice in
-            // one process, so a reboot restarts the :vm process and starts over
-            runOnUiThread { restartProcess(id, recovery, ohSpace) }
+            // the GL bridge cannot come up twice in one process, so a reboot restarts the :vm
+            // process and starts over
+            runOnUiThread { restartProcess(id, recovery) }
         }
     }
 
-    private fun restartProcess(id: String, recovery: Boolean = false, oh: Boolean = false) {
+    private fun restartProcess(id: String, recovery: Boolean = false) {
         val i = Intent(this, VmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).apply {
-            if (oh) putExtra(EXTRA_OH_SPACE, id)
-            else putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
+            putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
         }
         val pi = android.app.PendingIntent.getActivity(this, 1, i, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_CANCEL_CURRENT)
         (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
@@ -905,8 +867,10 @@ class VmActivity : ComponentActivity() {
         // AgentPaw floating chat: the entry on the operating page itself. Its shell rides the live
         // VM's own runner — no second qemu-user start.
         var agentOpen by remember { mutableStateOf(false) }
-        // the AgentPaw shell rides the live machine's own runner — an OpenHarmony space has no
-        // shell to ride, so its chat entry stays disabled instead of failing on every turn
+        // 插件 / ROOT 小窗：和 AgentPaw 小窗一样浮在画面上，针对正在运行的这台机器
+        var pluginsOpen by remember { mutableStateOf(false) }
+        var rootOpen by remember { mutableStateOf(false) }
+        // the AgentPaw shell rides the live machine's own runner
         val agentBridge = remember {
             val g = vm ?: return@remember null
             app.andropaw.agent.AgentVmBridge(applicationContext, null).apply {
@@ -1094,6 +1058,31 @@ class VmActivity : ComponentActivity() {
                     onMenu = { menuOpen = true },
                     onMenuBounds = { r -> menuIcon = r },
                     onAgent = { agentOpen = true },
+                    onPlugins = { pluginsOpen = true },
+                    onRoot = { rootOpen = true },
+                )
+            }
+
+            if (pluginsOpen) {
+                app.andropaw.ui.PluginsOverlay(
+                    img = vm?.img,
+                    vm = vm,
+                    onDismiss = { pluginsOpen = false },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 12.dp, bottom = 72.dp),
+                )
+            }
+
+            if (rootOpen) {
+                app.andropaw.ui.RootOverlay(
+                    img = vm?.img,
+                    onDismiss = { rootOpen = false },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(end = 12.dp, bottom = 72.dp),
                 )
             }
 
@@ -1142,6 +1131,8 @@ class VmActivity : ComponentActivity() {
         onMenu: () -> Unit,
         onMenuBounds: (androidx.compose.ui.geometry.Rect) -> Unit,
         onAgent: () -> Unit,
+        onPlugins: () -> Unit,
+        onRoot: () -> Unit,
     ) {
         val compact = session.navSize == 0
         val keys = remember(showKeys) {
@@ -1172,6 +1163,21 @@ class VmActivity : ComponentActivity() {
                     Icon(Icons.Rounded.AutoAwesome, stringResource(R.string.agent_chat_title),
                         Modifier.size(if (compact) 18.dp else 22.dp),
                         tint = if (agentEnabled) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+                }
+                // 插件 / ROOT：与 AgentPaw 一样的小窗，直接对着这台机器调整
+                Box(
+                    Modifier.size(btn).clip(CircleShape).clickable { onPlugins() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Extension, stringResource(R.string.tab_plugins),
+                        Modifier.size(if (compact) 18.dp else 22.dp), tint = MiuixTheme.colorScheme.primary)
+                }
+                Box(
+                    Modifier.size(btn).clip(CircleShape).clickable { onRoot() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.Shield, stringResource(R.string.tab_root),
+                        Modifier.size(if (compact) 18.dp else 22.dp), tint = MiuixTheme.colorScheme.primary)
                 }
                 if (keys.isNotEmpty()) {
                     Box(Modifier.size(width = 1.dp, height = if (compact) 18.dp else 24.dp)
@@ -1497,17 +1503,10 @@ class VmActivity : ComponentActivity() {
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_RECOVERY = "recovery"
-        /** an OpenHarmony space: the same page, driven by OhSession instead of core/GuestVm */
-        const val EXTRA_OH_SPACE = "space"
         /** how long after returning the screen is checked for frames (see [postResumeCheck]) */
         private const val RESUME_CHECK_MS = 8_000L
         fun start(ctx: Context, id: String, recovery: Boolean = false) {
             ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
-        /** Open an OpenHarmony space on the operating page (the emulator page's cards do). */
-        fun startOh(ctx: Context, spaceId: String) {
-            ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_OH_SPACE, spaceId)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }

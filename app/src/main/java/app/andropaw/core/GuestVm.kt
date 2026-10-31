@@ -278,6 +278,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 1. дерево
         val fixer = TreeFixer(ctx, paths, img, ::log)
         fixer.fixup()
+        // root gate, backend tools and the Xposed class path: in the tree before any guest process starts
+        Management.prepare(ctx, img, ::log)
+        // a rooted machine's guest can write to /system (the engine's shim reads AEMU_RO_SYSTEM)
+        runner.rootEnabled = runCatching { RootManager.state(ctx, img.id).enabled }.getOrDefault(false)
         // политика звука уже подменялась раньше — обновить её файлы (обёртка/AOSP) до текущей версии
         if (File(paths.root, "system/.aemu-parked/system#lib#hw#audio_policy.default.so").isFile) swapAudioPolicy()
         GuestLog.clear(paths.root)
@@ -418,6 +422,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }
         // своя панель кнопок у нас — экранную панель гостя (4.x) прячем, чтобы не дублировать
         overrides["qemu.hw.mainkeys"] = if (s.showNavBar && !(engine == Engine.N64 && kernel.navBarRequired)) "1" else "0"
+        // a rooted machine boots with the properties a rooted, debuggable build carries
+        overrides.putAll(Management.props(ctx, img))
         // отладка: run/props.extra — строки ключ=значение поверх всего остального
         File(paths.bin, "props.extra").takeIf { it.isFile }?.readLines()?.forEach { l ->
             val k = l.substringBefore('=').trim()
@@ -534,6 +540,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             it.userQemuArgs = s.qemuArgs
         }
         runnerRef = r
+        // (the same switch as the runner the boot used, so both see one machine's state)
+        r.rootEnabled = runner.rootEnabled
         Keeper.hold(ctx, img.name)
         // keep the guest's host-side process tree (`:vm` + its children + the separate `:binder`/`:gl`
         // helpers) out of the host low-memory killer even when AndroPaw is backgrounded
@@ -740,6 +748,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             return
         }
         val extra = LinkedHashMap<String, String>()
+        // the Xposed generation: bridge and modules go on the class path the framework loads from,
+        // which is how every app process started afterwards sees them
+        if (svc.name.startsWith("zygote")) Management.zygoteClasspath(ctx, img)?.let { extra["CLASSPATH"] = it }
         for ((sock, mode) in svc.sockets) extra["DHD_SOCK_$sock"] = "${paths.socket(sock).absolutePath},${if (engine == Engine.N64) mode else mode.substringBefore(',')}"
         if (svc.uid != 0) { extra["DHD_UID"] = svc.uid.toString(); extra["DHD_GID"] = svc.gid.toString() }
         var props = propsFile
@@ -998,6 +1009,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         TreeFixer(ctx, paths, img, ::log).noScreenSleep()
         disableBrokenComponents()
         if (img.api >= 24) runCatching { enableHome() }.onFailure { log("home screen check failed: $it") }
+        // plug-ins: their apks installed and their own boot scripts run — off the boot thread,
+        // a module's install must not delay the system coming up
+        Thread { runCatching { Management.onBoot(this) } }.apply { isDaemon = true }.start()
         val img2 =img.copy(lastBootMs = bootDoneAt - bootAt, bootCount = img.bootCount + 1)
         ImageStore.save(ctx, img2)
     }
@@ -1897,6 +1911,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop(); camera.stop(); GlHost.stop()
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
+        // nothing will answer `su` from this machine any more, and nothing should
+        RootManager.unwatch(img.id)
         Keeper.release(ctx)
         setState(State.STOPPED)
     }

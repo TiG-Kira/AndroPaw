@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +36,7 @@ import app.andropaw.AppPrefs
 import app.andropaw.BuildConfig
 import app.andropaw.R
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import androidx.compose.material.icons.rounded.ChevronRight
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.RadioButton
@@ -58,7 +58,6 @@ fun SettingsContent(
     onRestyle: () -> Unit,
     padding: PaddingValues,
     onAbout: () -> Unit = {},
-    onOhDeploy: () -> Unit = {},
 ) {
     val ctx = LocalContext.current
     var langDialog by remember { mutableStateOf(false) }
@@ -86,17 +85,6 @@ fun SettingsContent(
                     summary = stringResource(R.string.agent_settings_sub),
                     startAction = { Icon(Icons.Rounded.AutoAwesome, null, tint = MiuixTheme.colorScheme.primary) },
                     onClick = { agentSettings = true },
-                )
-            }
-        }
-
-        item {
-            Section(stringResource(R.string.oh_title)) {
-                ArrowPreference(
-                    title = stringResource(R.string.oh_manage_deploy),
-                    summary = stringResource(R.string.oh_manage_deploy_sub),
-                    startAction = { Icon(Icons.Rounded.PlayArrow, null, tint = MiuixTheme.colorScheme.primary) },
-                    onClick = onOhDeploy,
                 )
             }
         }
@@ -180,16 +168,27 @@ fun SettingsContent(
     }
 }
 
+/**
+ * The AndroPaw card that opens the About page.
+ *
+ * The whole card is the button: the ripple and the click area are the card's, not the row's,
+ * which is what the card is for — the padding around the row used to be dead space that
+ * neither lit up nor answered a tap. That also keeps the touch target at the card's full
+ * height instead of the row's.
+ */
 @Composable
 private fun AboutCard(onClick: () -> Unit = {}) {
-    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(vertical = 8.dp)) {
-        ArrowPreference(
+    Card(modifier = Modifier.fillMaxWidth(), insideMargin = PaddingValues(0.dp), onClick = onClick) {
+        BasicComponent(
             title = "AndroPaw",
             summary = stringResource(R.string.as_version, BuildConfig.VERSION_NAME),
             startAction = {
                 Image(painterResource(R.drawable.logo), null, Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)))
             },
-            onClick = onClick,
+            endActions = {
+                Icon(Icons.Rounded.ChevronRight, null, Modifier.size(20.dp),
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+            },
         )
     }
 }

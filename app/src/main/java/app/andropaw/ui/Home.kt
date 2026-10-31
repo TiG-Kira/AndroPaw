@@ -84,15 +84,14 @@ private fun skinColors(img: GuestImage): List<Color> {
 
 /**
  * The card every machine is drawn with: a "screen" gradient, its name underneath, the ⋮ for the
- * rest. Android machines and OpenHarmony spaces are laid out by the same hand here, so the two
- * kinds sit on the emulator page as equals.
+ * rest.
  */
 @Composable
 private fun MachineCardFrame(
     title: String,
-    /** the caption in the screen's top-left corner: the firmware's skin, or "OpenHarmony" */
+    /** the caption in the screen's top-left corner: the firmware's skin */
     badge: String,
-    /** the big number in the middle: an Android release, or the OH mark */
+    /** the big number in the middle: the Android release */
     centerMain: String,
     centerSub: String,
     sizeLine: String,
@@ -197,43 +196,10 @@ fun MachineCard(
     )
 }
 
-/** An OpenHarmony space, drawn exactly like an Android machine's card. */
-@Composable
-fun OhMachineCard(
-    space: app.andropaw.openharmony.OhSpace,
-    sizeBytes: Long,
-    modifier: Modifier = Modifier,
-    running: Boolean = false,
-    onStart: () -> Unit,
-    onMenu: (Rect) -> Unit,
-) {
-    val ctx = LocalContext.current
-    MachineCardFrame(
-        title = space.name,
-        badge = stringResource(R.string.oh_title),
-        centerMain = "OH",
-        centerSub = space.displayVersion,
-        sizeLine = listOfNotNull(
-            space.settings.displaySize,
-            if (sizeBytes > 0) Formatter.formatShortFileSize(ctx, sizeBytes) else null,
-            if (space.bootCount > 0) stringResource(R.string.oh_boot_count, space.bootCount) else null,
-        ).joinToString(" · "),
-        baseLine = null,
-        colors = ohColors(),
-        modifier = modifier,
-        running = running,
-        onStart = onStart,
-        onMenu = onMenu,
-    )
-}
-
-/** OpenHarmony's own blue-violet, so its cards read differently from any Android skin. */
-private fun ohColors(): List<Color> = listOf(Color(0xFF0A59F7), Color(0xFF7B2FF7))
-
 /**
- * "+": a FAB menu — create a machine (Android or OpenHarmony), or import a firmware file —
- * built from miuix tokens (the Material3 *Expressive* `FloatingActionButtonMenu` the original
- * used does not exist on the Material3 1.3.x baseline Miuix 0.9.4 requires).
+ * "+": a FAB menu — create a machine or import a firmware file — built from miuix tokens (the
+ * Material3 *Expressive* `FloatingActionButtonMenu` the original used does not exist on the
+ * Material3 1.3.x baseline Miuix 0.9.4 requires).
  */
 @Composable
 fun HomeFab(expanded: Boolean, onToggle: (Boolean) -> Unit, onImport: () -> Unit, onNewMachine: () -> Unit) {
@@ -280,20 +246,16 @@ private fun FabButton(
 }
 
 /**
- * "New machine": one sheet for both kinds — OpenHarmony on top (a space is created straight
- * from here), then every imported Android firmware, then the firmware files waiting in
- * Internal storage/andropaw/firmware. A miuix WindowDialog (bottom sheet on phones).
+ * "New machine": every imported Android firmware, then the firmware files waiting in
+ * Internal storage/andropaw/firmware. A miuix sheet (bottom sheet on phones).
  */
 @Composable
 fun NewMachineSheet(
     firmwares: List<GuestImage>,
-    ohRuntime: app.andropaw.openharmony.OhRuntimeRepository.OhRuntime?,
     onDismiss: () -> Unit,
     onImportFile: () -> Unit,
     onImportFolder: (java.io.File) -> Unit,
     onNewMachine: (GuestImage) -> Unit,
-    onNewOhSpace: () -> Unit,
-    onDeployOh: () -> Unit,
 ) {
     var files by remember { mutableStateOf(emptyList<java.io.File>()) }
     DisposableEffect(Unit) {
@@ -316,42 +278,6 @@ fun NewMachineSheet(
             Text(stringResource(R.string.new_machine_sub), fontSize = 13.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
 
-            // ---- OpenHarmony: a space of its own, created from here -------------------
-            Card(
-                onClick = { if (ohRuntime == null) onDeployOh() else onNewOhSpace() },
-                modifier = Modifier.fillMaxWidth(),
-                insideMargin = PaddingValues(14.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Box(
-                        Modifier
-                            .size(52.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Brush.linearGradient(ohColors())),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("OH", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.oh_machine_row), fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            if (ohRuntime != null) stringResource(R.string.oh_machine_ready, ohRuntime.ohVersion)
-                            else stringResource(R.string.oh_runtime_missing),
-                            fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
-                    }
-                    Button(onClick = { if (ohRuntime == null) onDeployOh() else onNewOhSpace() }) {
-                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.container_create))
-                    }
-                }
-            }
-
-            // ---- Android: everything an imported firmware can become ------------------
             Text(stringResource(R.string.vmos_tab_roms), fontSize = 16.sp, fontWeight = FontWeight.Bold)
 
             // Quick Import Card
