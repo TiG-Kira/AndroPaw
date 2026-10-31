@@ -40,7 +40,30 @@ run_phase() {
   done
 }
 
+# start the resident half of this machine's root backend (see apw_rootd.sh)
+start_rootd() {
+  [ -f "$APW/enabled" ] || return 0
+  if [ -f "$APW/rootd.pid" ]; then
+    old=$(cat "$APW/rootd.pid" 2>/dev/null)
+    if [ -d "/proc/$old" ]; then return 0; fi
+  fi
+  backend=$(cat "$APW/backend" 2>/dev/null)
+  case "$backend" in
+    magisk)
+      sh /data/adb/magisk/magiskd > /dev/null 2>&1 &
+      ;;
+    kernelsu)
+      sh /data/adb/ksu/bin/ksud daemon > /dev/null 2>&1 &
+      ;;
+    supersu)
+      sh /system/xbin/daemonsu > /dev/null 2>&1 &
+      ;;
+  esac
+  echo "-- root daemon: $backend" >> "$LOG" 2>/dev/null
+}
+
 run_phase post-fs-data.sh
 run_phase service.sh
+start_rootd
 
 echo "=== boot scripts done ===" >> "$LOG" 2>/dev/null

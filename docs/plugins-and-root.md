@@ -10,7 +10,7 @@ AndroPaw 的 guest 不是整机虚拟化：guest 的二进制通过 `qemu-arm`�
 
 - 没有真实的 `mount`、没有 SELinux、没有 overlayfs，也没有独立的 `magiskd`；
 - 宿主对 guest 的文件树有完全读写权限，所以"安装到模拟器里"就是**写进 guest 自己的目录树**；
-- "root" 不是真的换 uid（宿主上并没有可换的 root），而是一道**闸门**：`su` 是否存在、是否放行。
+- "root" 给的是 guest 自己这一套（进程身份 / 文件系统 / 属性 / `su`），不是宿主内核的 root。
 
 这两点决定了下面所有实现，也决定了能力的边界（见文末）。
 
@@ -51,24 +51,52 @@ AndroPaw 的 guest 不是整机虚拟化：guest 的二进制通过 `qemu-arm`�
 
 ## ROOT
 
-`core/RootManager.kt` + `res/raw/apw_su.sh`
+`core/RootManager.kt` + `core/RootBackend.kt` + `res/raw/apw_su.sh`
 
-- **开关**：`启用模拟器 ROOT 权限`。开 → 写入 `su`（`/data/adb/andropaw/bin/su`，并同时放到
-  `/system/bin`、`/system/xbin`、`/sbin`、`/data/adb/ksu/bin`）与 `enabled` 标记；关 → 全部移除。
-- **闸门**：`su` 从 `/proc` 找到真正的调用进程（连续几层 shell 会往上追），按包名在
-  `/data/adb/andropaw/policy` 里查 `allow` / `deny`。首次申请的包名写进 `requests.log`，并最多
-  等 60 秒——页面或小窗在这期间点"允许"，申请会直接继续执行。
+ROOT 就是提权：开关打开后，这台模拟器在 guest 自己看来就是一台已 ROOT 的设备。guest 跑在宿主
+内核上，所以"提权"落在四层上，缺一层都不完整：
+
+1. **进程身份** —— init 起的服务本来就以 root 运行（`InitPlan` 对 uid=0 的服务不传 `DHD_UID`）；
+   `su` 拉起的进程再导出 `AEMU64_ID=0,0` / `DHD_UID=0` / `DHD_GID=0`，从这一刻起它和它 exec
+   出来的东西在 guest 里 `getuid()`、`id`、`/proc/self/status` 全都是 0。
+2. **文件系统** —— `AEMU_RO_SYSTEM=0`（`GuestRunner.rootEnabled`）：`/system` 从只读变可写，
+   `mount -o rw,remount /system`、往 `/system/app` 里装东西都真的生效。
+3. **属性** —— `ro.secure=0`、`ro.adb.secure=0`、`ro.debuggable=1`、`ro.build.tags=test-keys`、
+   `service.adb.root=1` 合进属性区（`RootManager.props` → `GuestVm` 的 overrides）：adb 以 root
+   起来，root 检测看到的是它期待的、可以持有 root 的设备。
+4. **su 与那一代的产物** —— 按 API 分四代（`RootBackend.forApi`），每代都把它那一套布局摆在
+   guest 里，模块和 root 检测找什么就有什么：
+
+| Android 版本 | API | 后端 | 写进 guest 的东西 |
+| --- | --- | --- | --- |
+| 2.x – 3.x | < 14 | Superuser | `su` 于 `/system/xbin`、`/system/bin`、`/system/sbin`、`/sbin` |
+| 4.x – 7.x | 14–25 | SuperSU | 上面全部 + `/su/bin/su`、`daemonsu`、`supolicy`、`install-recovery.sh` |
+| 8.0 – 11 | 26–30 | Magisk | `/debug_ramdisk/su`、`/data/adb/magisk/{magisk,magiskd,magiskpolicy}`、`/sbin/magiskd` |
+| 12+ | ≥ 31 | KernelSU | `ksud`（含 `ksud daemon`）、`/data/adb/ksu/bin/su`、`/data/adb/ksu/modules` |
+
+- **su 怎么答复**：guest 只负责发问。`apw_su.sh` 把请求写进 `/data/adb/andropaw/ask/<pid>`，宿主
+  （`RootManager.watch`，60 ms 轮询）从 `/proc/<pid>` 往上跳过 shell 层找到真正调用它的包名，记进
+  `root.json`，再写 `answer/<pid>`。开关就是策略：开着答 `allow`，只有在这个页面上被单独收回过的
+  包才 `deny`。宿主不在（机器在别的进程里跑、或已经停了）时按"已 ROOT"放行。
+- **守护进程**：Magisk 有 `magiskd`、KernelSU 有 `ksud daemon`、SuperSU 有 `daemonsu`，都由
+  `/data/adb/andropaw/bin/boot` 在开机后拉起（`res/raw/apw_rootd.sh`），`ps` 里能看到那一代该有的
+  进程。2.x–3.x 没有守护进程的概念，`su` 二进制加 `ro.secure=0` 就是全部。
 - **页面**：KernelSU 超级用户页的样子：一行一个应用（图标 / 名称 / 包名 · uid / 开关），点开可
   允许、拒绝或忘记。图标和名称由宿主用自己的 `PackageManager` 直接读 guest 里的 apk
   （`core/GuestApps.kt`），所以机器没开机也能显示。
-- 关机状态、开机状态都生效：文件直接写在 guest 树里，下一进程启动立刻能看到新的 `su`/策略。
+- 关机状态、开机状态都生效：文件直接写在 guest 树里，下一进程启动立刻能看到新的 `su`/属性。
 
 ## 与真实实现的差别（重要）
 
-- **ROOT 不是提权**：宿主上没有 root 可提，`su` 放行的是"能执行命令"，不是"uid 变 0"。
-  同时导出 `AEMU64_ID=0,0` / `DHD_UID=0`，让关心 `id` 的程序看到一致的结果。
-- **没有 overlayfs / magiskd**：模块的 `system/` 是复制进树的（可逆），不是挂载；因此模块间的
-  加载顺序、magisk 的 `post-fs-data` 早期时机都简化了。
+- **提权的边界**：guest 与宿主共内核，"root"给的是 guest 自己这一套（init / framework / app /
+  `id` / 文件权限）全按 root 呈现、`/system` 真的可写；宿主自身的权限边界不变——宿主没有 root
+  可提，也不需要在有 root 的手机上才能跑。
+- **没有 SELinux**：`supolicy` 是空操作（没有策略可打补丁），因此 `supolicy --live` 之类不会真的
+  改到策略，也不会因此失败。
+- **KernelSU 没有内核模块**：真实 KernelSU 是 GKI 内核模块，这里用 `ksud` + `su` + `/data/adb/ksu`
+  在用户态复刻它的目录与命令；`ksud module install` 会提示改用 AndroPaw 页面安装。
+- **没有 overlayfs**：模块的 `system/` 是复制进树的（可逆），不是挂载；因此模块间的加载顺序、
+  magisk 的 `post-fs-data` 早期时机都简化了。
 - **Xposed 的方法级 Hook** 需要 guest 里存在 `bridge.jar`（放到 `/data/adb/xposed/bridge.jar`）；
   没有它，宿主只负责模块安装、启用停用与 `xposed_init` 登记。
-- **重启生效**：system 覆盖与 apk 安装都在开机流程里完成，装完插件后需要重新启动模拟器。
+- **重启生效**：system 覆盖、属性与 apk 安装都在开机流程里完成，改完这些需要重新启动模拟器。

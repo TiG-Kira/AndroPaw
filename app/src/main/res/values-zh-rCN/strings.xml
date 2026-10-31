@@ -316,11 +316,11 @@
     <string name="root_enable">启用模拟器 ROOT 权限</string>
     <string name="root_status_on">已开启 · %1$s</string>
     <string name="root_status_off">已关闭 · %1$s</string>
-    <string name="root_apps">申请 ROOT 权限的应用</string>
-    <string name="root_apps_sub">%1$d 个应用 · %2$d 个待处理</string>
-    <string name="root_empty">还没有应用申请 ROOT</string>
-    <string name="root_empty_sub">在模拟器里运行会调用 su 的应用，它就会带着开关出现在这里。</string>
-    <string name="root_note">这里的 ROOT 是一道闸门：su 位于 /data/adb/andropaw/bin/su，读取本页写入的策略，并记录每一次首次申请。模拟器不会被重新刷写，没有得到你的答复之前不会授予任何权限。</string>
+    <string name="root_apps">使用过 ROOT 的应用</string>
+    <string name="root_apps_sub">%1$d 个应用 · %2$d 个已收回</string>
+    <string name="root_empty">还没有应用使用 ROOT</string>
+    <string name="root_empty_sub">ROOT 已打开，模拟器里的应用现在可以调用 su 了。哪个应用用过，就会带着开关出现在这里。</string>
+    <string name="root_note">打开开关后，这台模拟器就是一台已 ROOT 的设备：init 启动的服务以 root 运行、/system 可写、ro.secure=0 与 ro.debuggable=1 生效，并按 Android 版本装上对应一代的 su 与守护进程——2.x–3.x 用 Superuser，4.x–7.x 用 SuperSU，8.0–11 用 Magisk，12 起用 KernelSU。关掉开关会把它们全部撤销；单个应用的开关只收回它自己的 ROOT。</string>
     <string name="root_pending">待处理</string>
     <string name="root_pending_count">%1$d 个待处理</string>
     <string name="root_granted">已授予</string>
@@ -331,6 +331,7 @@
     <string name="root_allow">允许</string>
     <string name="root_deny">拒绝</string>
     <string name="root_forget">忘记</string>
-    <string name="root_enabled_short">su 可用</string>
-    <string name="root_disabled_short">su 已移除</string>
+    <string name="root_enabled_short">模拟器已 ROOT</string>
+    <string name="root_disabled_short">未 ROOT</string>
+    <string name="root_no_emulator_hint">ROOT 属于某台模拟器。请先在模拟器页导入固件，再回到这里。</string>
 </resources>

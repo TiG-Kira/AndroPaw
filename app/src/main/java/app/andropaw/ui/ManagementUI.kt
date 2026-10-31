@@ -66,6 +66,13 @@ fun backendLine(img: GuestImage): String {
     return stringResource(R.string.mgmt_backend_line, b.label, b.note)
 }
 
+/** The superuser implementation this machine's generation is rooted with. */
+@Composable
+fun rootBackendLine(img: GuestImage): String {
+    val b = app.andropaw.core.RootBackend.forApi(img.api)
+    return stringResource(R.string.mgmt_backend_line, b.label, b.note)
+}
+
 /**
  * The machine a management page works on: one row that opens the list of imported machines.
  *
@@ -78,6 +85,7 @@ fun EmulatorSelector(
     selected: GuestImage?,
     onSelect: (GuestImage) -> Unit,
     modifier: Modifier = Modifier,
+    badge: @Composable (GuestImage) -> String = { PluginBackend.forApi(it.api).label },
 ) {
     var open by remember { mutableStateOf(false) }
     Card(modifier = modifier.fillMaxWidth(), insideMargin = PaddingValues(0.dp), onClick = { open = true }) {
@@ -88,7 +96,7 @@ fun EmulatorSelector(
             endActions = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     selected?.let {
-                        Text(PluginBackend.forApi(it.api).label, fontSize = 13.sp,
+                        Text(badge(it), fontSize = 13.sp,
                             color = MiuixTheme.colorScheme.primary, maxLines = 1)
                         Spacer(Modifier.width(4.dp))
                     }
@@ -114,7 +122,7 @@ fun EmulatorSelector(
                     items(images, key = { it.id }) { img ->
                         BasicComponent(
                             title = img.name,
-                            summary = "${machineLine(img)} · ${PluginBackend.forApi(img.api).label}",
+                            summary = "${machineLine(img)} · ${badge(img)}",
                             startAction = { AndroidAvatar(36.dp) },
                             endActions = { RadioButton(selected = img.id == selected?.id, onClick = null) },
                             onClick = { open = false; onSelect(img) },

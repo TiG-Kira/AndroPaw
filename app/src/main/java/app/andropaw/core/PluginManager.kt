@@ -155,18 +155,22 @@ object PluginManager {
         target.mkdirs()
 
         var apkName: String? = null
-        ZipFile(src).use { zip ->
-            val entries = zip.entries()
-            while (entries.hasMoreElements()) {
-                val e = entries.nextElement()
-                if (e.isDirectory) continue
-                val name = e.name.replace('\\', '/')
-                if (name.startsWith("META-INF/")) continue
-                if (name.contains("..") || name.startsWith("/")) continue
-                val out = File(target, name)
-                out.parentFile?.mkdirs()
-                zip.getInputStream(e).use { input -> out.outputStream().use { input.copyTo(it) } }
-                if (name.endsWith(".apk") && (name == "module.apk" || !name.contains('/'))) apkName = name
+        // An apk picked on its own is not unpacked: it *is* the plug-in's payload (an Xposed
+        // module, or a module that only ships an app), so it is stored as module.apk below.
+        if (!src.name.endsWith(".apk", true)) {
+            ZipFile(src).use { zip ->
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    if (e.isDirectory) continue
+                    val name = e.name.replace('\\', '/')
+                    if (name.startsWith("META-INF/")) continue
+                    if (name.contains("..") || name.startsWith("/")) continue
+                    val out = File(target, name)
+                    out.parentFile?.mkdirs()
+                    zip.getInputStream(e).use { input -> out.outputStream().use { input.copyTo(it) } }
+                    if (name.endsWith(".apk") && (name == "module.apk" || !name.contains('/'))) apkName = name
+                }
             }
         }
 

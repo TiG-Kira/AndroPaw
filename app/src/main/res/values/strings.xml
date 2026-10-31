@@ -317,11 +317,11 @@
     <string name="root_enable">Enable root for this emulator</string>
     <string name="root_status_on">On · %1$s</string>
     <string name="root_status_off">Off · %1$s</string>
-    <string name="root_apps">Apps that asked for root</string>
-    <string name="root_apps_sub">%1$d apps · %2$d waiting</string>
-    <string name="root_empty">No app has asked for root yet</string>
-    <string name="root_empty_sub">Start an app inside the emulator that runs su, and it appears here with a switch.</string>
-    <string name="root_note">Root here is a gate: su lives at /data/adb/andropaw/bin/su, reads the policy this page writes and records every first request. The emulator is not re-flashed, and nothing is granted until you answer.</string>
+    <string name="root_apps">Apps that used root</string>
+    <string name="root_apps_sub">%1$d apps · %2$d revoked</string>
+    <string name="root_empty">No app has used root yet</string>
+    <string name="root_empty_sub">Root is on, so an app inside the emulator can run su. Whichever one does appears here with a switch.</string>
+    <string name="root_note">With the switch on this emulator is a rooted device: the processes init starts run as root, /system is writable, ro.secure=0 and ro.debuggable=1 are in effect, and the su and the daemon of the machine's own generation are installed — Superuser on 2.x–3.x, SuperSU on 4.x–7.x, Magisk on 8.0–11, KernelSU on 12 and newer. Turning it off takes all of that back; one app's switch takes root back from that app alone.</string>
     <string name="root_pending">waiting</string>
     <string name="root_pending_count">%1$d waiting</string>
     <string name="root_granted">Granted</string>
@@ -332,6 +332,7 @@
     <string name="root_allow">Allow</string>
     <string name="root_deny">Deny</string>
     <string name="root_forget">Forget</string>
-    <string name="root_enabled_short">su is available</string>
-    <string name="root_disabled_short">su is removed</string>
+    <string name="root_enabled_short">The emulator is rooted</string>
+    <string name="root_disabled_short">Not rooted</string>
+    <string name="root_no_emulator_hint">Root belongs to one emulator. Import a firmware on the emulator page, then come back.</string>
 </resources>

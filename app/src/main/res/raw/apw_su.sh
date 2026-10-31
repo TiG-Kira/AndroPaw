@@ -1,135 +1,133 @@
 #!/system/bin/sh
 # AndroPaw superuser client.
 #
-# A guest process asks for root by running su. This script looks the caller up in the policy
-# the host keeps at /data/adb/andropaw/policy, records a first-time request in requests.log
-# (the ROOT page lists those, KernelSU-style) and waits for the user's answer before it gives
-# up. Root here is a gate, not a real uid change: this emulator runs the guest on the host's
-# kernel, so what a "root" process may touch is decided by the gate, not by setuid.
+# This emulator runs the guest on the host's kernel, so "root" is not a second boot image:
+# it is the emulator's own privilege layer. When the ROOT switch is on, the machine is
+# rooted — init's services start as root, /system is writable, the properties a rooted
+# device carries are set — and this script is the door an app knocks on.
+#
+# The door answers through the host, not here: this script drops a request in
+# /data/adb/andropaw/ask/<pid> and waits for /data/adb/andropaw/answer/<pid>. The host knows
+# which package is calling (it reads the process tree), keeps the list the ROOT page shows,
+# and answers "allow" for a rooted machine unless that app was denied there. Every tool used
+# below exists in the toolbox of 2.3 as well — no tr, no grep, no cut.
 
 APW=/data/adb/andropaw
-POL=$APW/policy
-REQ=$APW/requests.log
+ASK=$APW/ask
+ANS=$APW/answer
 
 if [ ! -f "$APW/enabled" ]; then
-  echo "su: root access is disabled on this machine (AndroPaw > ROOT)" >&2
+  echo "su: this emulator is not rooted (turn on ROOT in AndroPaw)" >&2
   exit 1
 fi
 
-# ------------------------------------------------------------------ who is asking
-# The caller is the process that ran su. Apps usually reach it through a shell
-# (Runtime.exec("su -c ...") goes through /system/bin/sh), so a few levels are climbed while
-# the process found is a shell rather than an app.
-name_of() {
-  n=""
-  if [ -r "/proc/$1/cmdline" ]; then
-    n=$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | head -n 1)
-  fi
-  if [ -z "$n" ]; then
-    n=$(cat "/proc/$1/comm" 2>/dev/null)
-  fi
-  # the process name, not the path it was started from: an app's is its package
-  n=${n##*/}
-  echo "$n"
-}
-
-parent_of() {
-  rest=$(sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null)
-  echo "$rest" | cut -d' ' -f2
-}
-
-PARENT=$PPID
-CALLER=$(name_of "$PARENT")
-CUID=$(id -u 2>/dev/null)
-climb=0
-while [ $climb -lt 3 ]; do
-  case "$CALLER" in
-    sh|ash|mksh|ksh|dash|su|toybox|busybox|"")
-      next=$(parent_of "$PARENT")
-      if [ -z "$next" ] || [ "$next" = "0" ] || [ "$next" = "1" ]; then
-        break
-      fi
-      PARENT=$next
-      CALLER=$(name_of "$PARENT")
-      ;;
-    *)
-      break
-      ;;
-  esac
-  climb=$((climb+1))
-done
-if [ -z "$CALLER" ]; then
-  CALLER=unknown
-fi
+# ------------------------------------------------------------------ who we pretend to be
+# The version a root check reads out of `su -v` (and `-V`), per generation.
+BACKEND=$(cat "$APW/backend" 2>/dev/null)
+case "$BACKEND" in
+  magisk)    VERSION_NAME="26.4:MAGISKSU"; VERSION_CODE=26400 ;;
+  kernelsu)  VERSION_NAME="0.9.5:kernelsu"; VERSION_CODE=10905 ;;
+  supersu)   VERSION_NAME="2.82:SUPERSU";  VERSION_CODE=282 ;;
+  *)         VERSION_NAME="1.0.0:superuser"; VERSION_CODE=100 ;;
+esac
 
 # ------------------------------------------------------------------ what to run
 CMD=""
 SHELL_ONLY=1
-case "$1" in
-  -c)
-    CMD=$2
-    SHELL_ONLY=0
-    ;;
-  -s|-|"")
-    SHELL_ONLY=1
-    ;;
-  0|root)
-    shift
-    CMD="$*"
-    SHELL_ONLY=0
-    ;;
-  *)
-    CMD="$*"
-    SHELL_ONLY=0
-    ;;
-esac
+SHELLBIN=/system/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c)
+      CMD=$2
+      SHELL_ONLY=0
+      shift 2
+      ;;
+    -s)
+      SHELLBIN=$2
+      shift 2
+      ;;
+    -v|--version)
+      echo "$VERSION_NAME"
+      exit 0
+      ;;
+    -V)
+      echo "$VERSION_CODE"
+      exit 0
+      ;;
+    --mount-master|--context)
+      shift 2
+      ;;
+    --context=*)
+      shift
+      ;;
+    -l|--login|-)
+      shift
+      ;;
+    0|root|--root)
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      CMD="$1"
+      shift
+      SHELL_ONLY=0
+      break
+      ;;
+  esac
+done
 if [ -n "$CMD" ]; then
   SHELL_ONLY=0
 fi
 
-# ------------------------------------------------------------------ policy
-decision() {
-  if [ ! -f "$POL" ]; then
-    return 0
-  fi
-  grep -m1 "^$CALLER " "$POL" 2>/dev/null | cut -d' ' -f2
-}
+# ------------------------------------------------------------------ ask the host
+ME=$$
+# The host looks at the ask directory a few times a second, so the answer is usually there in
+# well under a tenth: poll quickly where the toolbox can sleep a fraction (3.x+), in whole
+# seconds where it cannot.
+NAP=0.02
+TRIES=120
+if ! sleep 0.02 2>/dev/null; then NAP=1; TRIES=8; fi
 
-state=$(decision)
+echo "$CMD" > "$ASK/$ME" 2>/dev/null
 
-if [ "$state" != "allow" ] && [ "$state" != "deny" ]; then
-  # First request from this app: record it for the ROOT page, then give the user a moment to
-  # answer instead of failing straight away.
-  if ! grep -q "^$CALLER " "$REQ" 2>/dev/null; then
-    printf '%s %s %s %s\n' "$(date +%s)" "$CALLER" "$CUID" "$CMD" >> "$REQ" 2>/dev/null
+ANSWER=""
+i=0
+while [ $i -lt $TRIES ]; do
+  if [ -f "$ANS/$ME" ]; then
+    ANSWER=$(cat "$ANS/$ME" 2>/dev/null)
+    break
   fi
-  n=0
-  while [ $n -lt 300 ]; do
-    state=$(decision)
-    if [ "$state" = "allow" ]; then
-      break
-    fi
-    sleep 0.2 2>/dev/null || sleep 1
-    n=$((n+1))
-  done
+  sleep $NAP
+  i=$((i+1))
+done
+rm -f "$ANS/$ME" 2>/dev/null
+rm -f "$ASK/$ME" 2>/dev/null
+
+# No answer at all means nothing is watching (the machine was started outside AndroPaw, or
+# the host is busy): a rooted machine grants, which is what the switch promised.
+if [ -z "$ANSWER" ]; then
+  ANSWER=allow
 fi
-
-if [ "$state" != "allow" ]; then
-  echo "su: permission denied for $CALLER" >&2
+if [ "$ANSWER" != "allow" ]; then
+  echo "su: permission denied" >&2
   exit 1
 fi
 
 # ------------------------------------------------------------------ run
-# AEMU64_ID is what the arm64 runner reads to report an id; DHD_UID is the 32-bit engine's
-# spelling of the same thing. Neither turns a shell into a real uid 0 (there is no root to
-# turn into), but both keep /proc/self/status and the common `id` checks consistent for the
-# processes that care.
-# (exported rather than passed through `env`: toolbox on 2.x does not ship one)
+# AEMU64_ID is what the arm64 runner reads to report an id, DHD_UID is the 32-bit engine's
+# spelling of the same thing: from here on everything this process starts answers `id` with
+# 0 — that is the privilege the switch gives, the guest's own notion of root.
 AEMU64_ID=0,0
 DHD_UID=0
 DHD_GID=0
 export AEMU64_ID DHD_UID DHD_GID
 if [ "$SHELL_ONLY" = "1" ]; then
-  exec /system/bin/sh
+  exec "$SHELLBIN"
 fi
-exec /system/bin/sh -c "$CMD"
+exec "$SHELLBIN" -c "$CMD"

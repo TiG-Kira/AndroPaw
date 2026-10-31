@@ -75,7 +75,7 @@ fun RootContent(images: List<GuestImage>, padding: PaddingValues) {
         if (selected == null) { state = RootState(); return@LaunchedEffect }
         while (true) {
             state = withContext(Dispatchers.IO) {
-                runCatching { RootManager.collectRequests(ctx, selected) }.getOrDefault(RootManager.state(ctx, selected.id))
+                runCatching { RootManager.pump(ctx, selected) }.getOrDefault(RootManager.state(ctx, selected.id))
             }
             delay(1_500)
         }
@@ -94,8 +94,8 @@ fun RootContent(images: List<GuestImage>, padding: PaddingValues) {
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item { EmulatorSelector(images, null, choose) }
-            item { NoteCard(stringResource(R.string.plugins_no_emulator_hint)) }
+            item { EmulatorSelector(images, null, choose, badge = { rootBackendLine(it) }) }
+            item { NoteCard(stringResource(R.string.root_no_emulator_hint)) }
         }
         return
     }
@@ -108,14 +108,14 @@ fun RootContent(images: List<GuestImage>, padding: PaddingValues) {
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        item { EmulatorSelector(images, selected, choose) }
+        item { EmulatorSelector(images, selected, choose, badge = { rootBackendLine(it) }) }
 
         item {
             Card(Modifier.fillMaxWidth(), insideMargin = PaddingValues(0.dp)) {
                 BasicComponent(
                     title = stringResource(R.string.root_enable),
-                    summary = if (state.enabled) stringResource(R.string.root_status_on, backendLine(selected))
-                    else stringResource(R.string.root_status_off, backendLine(selected)),
+                    summary = if (state.enabled) stringResource(R.string.root_status_on, rootBackendLine(selected))
+                    else stringResource(R.string.root_status_off, rootBackendLine(selected)),
                     startAction = {
                         Box(
                             Modifier.size(40.dp).clip(CircleShape)
@@ -150,7 +150,7 @@ fun RootContent(images: List<GuestImage>, padding: PaddingValues) {
             ManagementSection(
                 stringResource(R.string.root_apps),
                 if (state.apps.isEmpty()) null
-                else stringResource(R.string.root_apps_sub, state.apps.size, state.pendingCount),
+                else stringResource(R.string.root_apps_sub, state.apps.size, state.deniedCount),
             )
         }
 
@@ -305,7 +305,7 @@ fun RootOverlay(
         if (img == null) return@LaunchedEffect
         while (true) {
             state = withContext(Dispatchers.IO) {
-                runCatching { RootManager.collectRequests(ctx, img) }.getOrDefault(RootManager.state(ctx, img.id))
+                runCatching { RootManager.pump(ctx, img) }.getOrDefault(RootManager.state(ctx, img.id))
             }
             delay(1_500)
         }

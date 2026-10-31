@@ -24,6 +24,8 @@ class GuestRunner(
     var singleTouch = false
     var binderVerbose = false
     var sdcardHost: File? = null
+    /** the machine is rooted: /system answers writes, as it does on a device with root */
+    var rootEnabled = false
     /** user's extra qemu options from firmware settings: KEY=VALUE tokens become env vars, the rest go to qemu */
     var userQemuArgs: String = ""
 
@@ -147,8 +149,9 @@ class GuestRunner(
             e.putIfAbsent("EMULATED_STORAGE_SOURCE", "/mnt/shell/emulated")
             e.putIfAbsent("EMULATED_STORAGE_TARGET", "/storage/emulated")
         }
-        // libaemushim: the precompiled code under /system is read-only like on the real mount
-        e["AEMU_RO_SYSTEM"] = "1"
+        // libaemushim: the precompiled code under /system is read-only like on the real mount —
+        // unless the machine is rooted, where /system is what root gets to write
+        e["AEMU_RO_SYSTEM"] = if (rootEnabled) "0" else "1"
         // libaemushim serves /proc/meminfo scaled to this budget instead of the phone's own memory
         e["AEMU_RAM_KB"] = (guestRamMb(img.api, s.ramMb) * 1024L).toString()
         e["HOME"] = "/data"

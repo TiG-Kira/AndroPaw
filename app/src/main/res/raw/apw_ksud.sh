@@ -76,6 +76,10 @@ case "$1" in
         ;;
     esac
     ;;
+  daemon)
+    # what init runs on a real KernelSU device: the resident half that answers `su`
+    sh /data/adb/andropaw/bin/rootd
+    ;;
   *)
     echo "KernelSU-compatible ksud (AndroPaw) version $VERSION" >&2
     echo "usage: ksud module ..." >&2
