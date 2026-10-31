@@ -321,7 +321,7 @@
     <string name="root_apps_sub">%1$d apps · %2$d revoked</string>
     <string name="root_empty">No app has used root yet</string>
     <string name="root_empty_sub">Root is on, so an app inside the emulator can run su. Whichever one does appears here with a switch.</string>
-    <string name="root_note">With the switch on this emulator is a rooted device: the processes init starts run as root, /system is writable, ro.secure=0 and ro.debuggable=1 are in effect, and the su and the daemon of the machine's own generation are installed — Superuser on 2.x–3.x, SuperSU on 4.x–7.x, Magisk on 8.0–11, KernelSU on 12 and newer. Turning it off takes all of that back; one app's switch takes root back from that app alone.</string>
+    <string name="root_note">With the switch on this emulator is a rooted device: the processes init starts run as root, /system is writable, ro.secure=0 and ro.debuggable=1 are in effect, and the su and the daemon of the machine's own generation are installed — Superuser on 2.x–3.x, SuperSU on 4.x–7.x, Magisk on 8.0–11, KernelSU on 12 and newer. Turning it off takes all of that back; one app's switch takes root back from that app alone. su works at once; the properties and the writable /system need the emulator to start again.</string>
     <string name="root_pending">waiting</string>
     <string name="root_pending_count">%1$d waiting</string>
     <string name="root_granted">Granted</string>

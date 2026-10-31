@@ -320,7 +320,7 @@
     <string name="root_apps_sub">%1$d 个应用 · %2$d 个已收回</string>
     <string name="root_empty">还没有应用使用 ROOT</string>
     <string name="root_empty_sub">ROOT 已打开，模拟器里的应用现在可以调用 su 了。哪个应用用过，就会带着开关出现在这里。</string>
-    <string name="root_note">打开开关后，这台模拟器就是一台已 ROOT 的设备：init 启动的服务以 root 运行、/system 可写、ro.secure=0 与 ro.debuggable=1 生效，并按 Android 版本装上对应一代的 su 与守护进程——2.x–3.x 用 Superuser，4.x–7.x 用 SuperSU，8.0–11 用 Magisk，12 起用 KernelSU。关掉开关会把它们全部撤销；单个应用的开关只收回它自己的 ROOT。</string>
+    <string name="root_note">打开开关后，这台模拟器就是一台已 ROOT 的设备：init 启动的服务以 root 运行、/system 可写、ro.secure=0 与 ro.debuggable=1 生效，并按 Android 版本装上对应一代的 su 与守护进程——2.x–3.x 用 Superuser，4.x–7.x 用 SuperSU，8.0–11 用 Magisk，12 起用 KernelSU。关掉开关会把它们全部撤销；单个应用的开关只收回它自己的 ROOT。su 立即生效，属性与 /system 可写要重新启动模拟器才生效。</string>
     <string name="root_pending">待处理</string>
     <string name="root_pending_count">%1$d 个待处理</string>
     <string name="root_granted">已授予</string>
