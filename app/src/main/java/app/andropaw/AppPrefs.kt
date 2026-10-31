@@ -52,6 +52,13 @@ object AppPrefs {
     fun autoCheckUpdates(ctx: Context): Boolean = sp(ctx).getBoolean("auto_check_updates", true)
     fun setAutoCheckUpdates(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("auto_check_updates", v).apply()
 
+    /** The machine the plug-in page and the ROOT page were last pointed at. */
+    fun pluginsTarget(ctx: Context): String = sp(ctx).getString("plugins_target", "") ?: ""
+    fun setPluginsTarget(ctx: Context, id: String) = sp(ctx).edit().putString("plugins_target", id).apply()
+
+    fun rootTarget(ctx: Context): String = sp(ctx).getString("root_target", "") ?: ""
+    fun setRootTarget(ctx: Context, id: String) = sp(ctx).edit().putString("root_target", id).apply()
+
     fun lastUpdateCheck(ctx: Context): Long = sp(ctx).getLong("last_update_check", 0L)
     fun setLastUpdateCheck(ctx: Context, v: Long) = sp(ctx).edit().putLong("last_update_check", v).apply()
 

@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# guest-side shell scripts are copied into the emulator byte for byte: they must keep LF
+app/src/main/res/raw/*.sh text eol=lf

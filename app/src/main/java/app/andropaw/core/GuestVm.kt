@@ -278,6 +278,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 1. дерево
         val fixer = TreeFixer(ctx, paths, img, ::log)
         fixer.fixup()
+        // root gate, backend tools and the Xposed class path: in the tree before any guest process starts
+        Management.prepare(ctx, img, ::log)
         // политика звука уже подменялась раньше — обновить её файлы (обёртка/AOSP) до текущей версии
         if (File(paths.root, "system/.aemu-parked/system#lib#hw#audio_policy.default.so").isFile) swapAudioPolicy()
         GuestLog.clear(paths.root)
@@ -740,6 +742,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             return
         }
         val extra = LinkedHashMap<String, String>()
+        // the Xposed generation: bridge and modules go on the class path the framework loads from,
+        // which is how every app process started afterwards sees them
+        if (svc.name.startsWith("zygote")) Management.zygoteClasspath(ctx, img)?.let { extra["CLASSPATH"] = it }
         for ((sock, mode) in svc.sockets) extra["DHD_SOCK_$sock"] = "${paths.socket(sock).absolutePath},${if (engine == Engine.N64) mode else mode.substringBefore(',')}"
         if (svc.uid != 0) { extra["DHD_UID"] = svc.uid.toString(); extra["DHD_GID"] = svc.gid.toString() }
         var props = propsFile
@@ -998,6 +1003,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         TreeFixer(ctx, paths, img, ::log).noScreenSleep()
         disableBrokenComponents()
         if (img.api >= 24) runCatching { enableHome() }.onFailure { log("home screen check failed: $it") }
+        // plug-ins: overlays applied, their apks installed, their own boot scripts run
+        Management.onBoot(this)
         val img2 =img.copy(lastBootMs = bootDoneAt - bootAt, bootCount = img.bootCount + 1)
         ImageStore.save(ctx, img2)
     }

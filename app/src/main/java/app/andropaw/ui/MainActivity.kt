@@ -44,6 +44,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Android
@@ -199,14 +201,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     var addMenu by remember { mutableStateOf(false) }
     var library by remember { mutableStateOf(false) }        // the "new machine" sheet
     var containerFrom by remember { mutableStateOf<GuestImage?>(null) }
-    /** the OpenHarmony deployment page, opened from the settings row */
-    var ohDeploy by remember { mutableStateOf(false) }
     /** 0 = emulator page, 1 = AgentPaw page, 2 = settings page. */
     var tab by remember { mutableStateOf(0) }
-    // the ⋮ of an OpenHarmony card: rename / wipe / delete
-    var ohRenameFor by remember { mutableStateOf<app.andropaw.openharmony.OhSpace?>(null) }
-    var ohResetFor by remember { mutableStateOf<app.andropaw.openharmony.OhSpace?>(null) }
-    var ohDeleteFor by remember { mutableStateOf<app.andropaw.openharmony.OhSpace?>(null) }
     /** The AgentPaw chat page, drawn over the shell. */
     var agentChat by remember { mutableStateOf(false) }
     /**
@@ -215,8 +211,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
      * drawn under the neighbouring ones.
      */
     var cardMenu by remember { mutableStateOf<Pair<GuestImage, Rect>?>(null) }
-    /** an OpenHarmony card's ⋮ menu: the space and where its icon sits, in root coordinates */
-    var ohCardMenu by remember { mutableStateOf<Pair<app.andropaw.openharmony.OhSpace, Rect>?>(null) }
     /** the page box's own place in root coordinates: the popup's anchor is handed over relative to it */
     var pageOrigin by remember { mutableStateOf(Offset.Zero) }
     /** where the shell overlay starts, for a machine card's menu anchor */
@@ -238,19 +232,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
         }
     }
 
-    // OpenHarmony machines are machines like any other here: their spaces are cards on this
-    // very grid, and they reload whenever the page comes back (the user may have deployed a
-    // runtime or created a space in the meantime)
-    var ohSpaces by remember { mutableStateOf(emptyList<app.andropaw.openharmony.OhSpace>()) }
-    var ohRuntime by remember { mutableStateOf<app.andropaw.openharmony.OhRuntimeRepository.OhRuntime?>(null) }
-    var ohSizes by remember { mutableStateOf(mapOf<String, Long>()) }
-    suspend fun refreshOh() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val list = app.andropaw.openharmony.OhSpaceStore.list(ctx)
-        ohSpaces = list
-        ohSizes = list.associate { it.id to app.andropaw.openharmony.OhSpaceStore.dataBytes(ctx, it.id) }
-        ohRuntime = app.andropaw.openharmony.OhRuntimeRepository.installed(ctx).firstOrNull()
-    }
-    LaunchedEffect(Unit) { refreshOh() }
 
 
 
@@ -284,26 +265,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
 
     val scope = rememberCoroutineScope()
 
-    /** A new OpenHarmony space against the deployed runtime; it appears on this page like any machine. */
-    fun createOhSpace() {
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val rt = app.andropaw.openharmony.OhRuntimeRepository.installed(ctx).firstOrNull() ?: return@launch
-            val n = app.andropaw.openharmony.OhSpaceStore.list(ctx).size + 1
-            app.andropaw.openharmony.OhSpaceStore.create(ctx, ctx.getString(R.string.oh_machine_default, n), rt)
-            refreshOh()
-        }
-    }
 
-    // reload the OpenHarmony section whenever the page comes back: the user may have installed
-    // a runtime or created a space in the management page since
-    val ohLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(ohLifecycle) {
-        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
-            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) scope.launch { refreshOh() }
-        }
-        ohLifecycle.lifecycle.addObserver(obs)
-        onDispose { ohLifecycle.lifecycle.removeObserver(obs) }
-    }
     var updateState by remember { mutableStateOf<UpdateState>(UpdateState.Idle) }
     var downloadJob by remember { mutableStateOf<Job?>(null) }
 
@@ -350,7 +312,9 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             GlassTopAppBar(
                 title = when (tab) {
                     0 -> stringResource(R.string.tab_emulator)
-                    1 -> stringResource(R.string.tab_agent)
+                    1 -> stringResource(R.string.tab_plugins)
+                    2 -> stringResource(R.string.tab_root)
+                    3 -> stringResource(R.string.tab_agent)
                     else -> stringResource(R.string.settings)
                 },
                 backdrop = page.backdrop,
@@ -373,6 +337,8 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 GlassNavigationBar(
                     items = listOf(
                         GlassNavigationItem(Icons.Rounded.Android, stringResource(R.string.tab_emulator)),
+                        GlassNavigationItem(Icons.Rounded.Extension, stringResource(R.string.tab_plugins)),
+                        GlassNavigationItem(Icons.Rounded.Shield, stringResource(R.string.tab_root)),
                         GlassNavigationItem(Icons.Rounded.AutoAwesome, stringResource(R.string.tab_agent)),
                         GlassNavigationItem(Icons.Rounded.Settings, stringResource(R.string.settings)),
                     ),
@@ -393,16 +359,28 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                         onClick = { tab = 0 },
                     )
                     NavigationBarItem(
-                        icon = Icons.Rounded.AutoAwesome,
-                        label = stringResource(R.string.tab_agent),
+                        icon = Icons.Rounded.Extension,
+                        label = stringResource(R.string.tab_plugins),
                         selected = tab == 1,
                         onClick = { tab = 1 },
                     )
                     NavigationBarItem(
-                        icon = Icons.Rounded.Settings,
-                        label = stringResource(R.string.settings),
+                        icon = Icons.Rounded.Shield,
+                        label = stringResource(R.string.tab_root),
                         selected = tab == 2,
                         onClick = { tab = 2 },
+                    )
+                    NavigationBarItem(
+                        icon = Icons.Rounded.AutoAwesome,
+                        label = stringResource(R.string.tab_agent),
+                        selected = tab == 3,
+                        onClick = { tab = 3 },
+                    )
+                    NavigationBarItem(
+                        icon = Icons.Rounded.Settings,
+                        label = stringResource(R.string.settings),
+                        selected = tab == 4,
+                        onClick = { tab = 4 },
                     )
                 }
             }
@@ -450,7 +428,7 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             ImportCard(imp, onCancel = model::cancelImport, onDismiss = model::dismissImport)
                         }
                     }
-                    if (images.isEmpty() && ohSpaces.isEmpty() && !imp.active) item(span = full) { EmptyState(onHelp = { help = true }) }
+                    if (images.isEmpty() && !imp.active) item(span = full) { EmptyState(onHelp = { help = true }) }
                     items(images.size, key = { images[it].id }) { i ->
                         val img = images[i]
                         MachineCard(
@@ -462,20 +440,18 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             onMenu = { anchor -> cardMenu = img to anchor },
                         )
                     }
-                    // OpenHarmony spaces: the same cards, the same grid, the same menu
-                    items(ohSpaces.size, key = { "oh-" + ohSpaces[it].id }) { i ->
-                        val space = ohSpaces[i]
-                        OhMachineCard(
-                            space = space,
-                            sizeBytes = ohSizes[space.id] ?: 0L,
-                            modifier = Modifier.animateItem(),
-                            running = runningId == space.id,
-                            onStart = { VmActivity.startOh(ctx, space.id) },
-                            onMenu = { anchor -> ohCardMenu = space to anchor },
-                        )
-                    }
                 }
             } else if (tab == 1) {
+                PluginsContent(
+                    images = images,
+                    padding = PaddingValues(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding()),
+                )
+            } else if (tab == 2) {
+                RootContent(
+                    images = images,
+                    padding = PaddingValues(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding()),
+                )
+            } else if (tab == 3) {
                 app.andropaw.agent.AgentHomeContent(
                     model = model,
                     padding = PaddingValues(
@@ -493,7 +469,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             } else {
                 SettingsContent(
                     onRestyle = onRestyle,
-                    onOhDeploy = { ohDeploy = true },
                     padding = PaddingValues(
                         top = pad.calculateTopPadding(),
                         bottom = pad.calculateBottomPadding(),
@@ -541,64 +516,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                 ))
             }
         }
-        // an OpenHarmony space's own dialogs: rename, wipe its data, delete it
-        ohRenameFor?.let { space ->
-            var name by remember { mutableStateOf(space.name) }
-            MiuixDialog(
-                show = true,
-                title = stringResource(R.string.name),
-                onDismissRequest = { ohRenameFor = null },
-            ) {
-                TextField(value = name, onValueChange = { name = it }, singleLine = true, label = "")
-                DialogButtonRow(listOf(
-                    DialogAction(stringResource(R.string.cancel), onClick = { ohRenameFor = null }),
-                    DialogAction(stringResource(R.string.save), onClick = {
-                        val n = name.trim().ifEmpty { space.name }
-                        app.andropaw.openharmony.OhSpaceStore.rename(ctx, space.id, n)
-                        ohRenameFor = null
-                        scope.launch { refreshOh() }
-                    }, primary = true),
-                ))
-            }
-        }
-        ohResetFor?.let { space ->
-            MiuixDialog(
-                show = true,
-                title = stringResource(R.string.reset_title, space.name),
-                summary = stringResource(R.string.reset_text),
-                onDismissRequest = { ohResetFor = null },
-            ) {
-                DialogButtonRow(listOf(
-                    DialogAction(stringResource(R.string.cancel), onClick = { ohResetFor = null }),
-                    DialogAction(stringResource(R.string.reset_data), onClick = {
-                        ohResetFor = null
-                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            app.andropaw.openharmony.OhSpaceStore.resetData(ctx, space.id)
-                            refreshOh()
-                        }
-                    }, primary = true, destructive = true),
-                ))
-            }
-        }
-        ohDeleteFor?.let { space ->
-            MiuixDialog(
-                show = true,
-                title = stringResource(R.string.delete_title, space.name),
-                summary = stringResource(R.string.delete_text, Formatter.formatShortFileSize(ctx, ohSizes[space.id] ?: 0L)),
-                onDismissRequest = { ohDeleteFor = null },
-            ) {
-                DialogButtonRow(listOf(
-                    DialogAction(stringResource(R.string.cancel), onClick = { ohDeleteFor = null }),
-                    DialogAction(stringResource(R.string.delete), onClick = {
-                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                            app.andropaw.openharmony.OhSpaceStore.delete(ctx, space.id)
-                            refreshOh()
-                        }
-                        ohDeleteFor = null
-                    }, primary = true, destructive = true),
-                ))
-            }
-        }
         renameFor?.let { img ->
             var name by remember { mutableStateOf(img.name) }
             MiuixDialog(
@@ -616,12 +533,10 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             }
         }
         if (help) HelpDialog(onDismiss = { help = false })
-        if (library) NewMachineSheet(images.filter { it.baseId.isEmpty() }, ohRuntime, onDismiss = { library = false },
+        if (library) NewMachineSheet(images.filter { it.baseId.isEmpty() }, onDismiss = { library = false },
             onImportFile = { library = false; pick.launch(arrayOf("*/*")) },
             onImportFolder = { f -> library = false; model.import(android.net.Uri.fromFile(f)) },
-            onNewMachine = { library = false; containerFrom = it },
-            onNewOhSpace = { library = false; createOhSpace() },
-            onDeployOh = { library = false; ohDeploy = true })
+            onNewMachine = { library = false; containerFrom = it })
         containerFrom?.let { src -> ContainerDialog(src, images, onDismiss = { containerFrom = null },
             onCreate = { from, name, copy, settings -> containerFrom = null; model.clone(from, name, copy, settings) }) }
 
@@ -637,13 +552,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
             onInstall = { file -> AppUpdateManager.installApk(ctx, file) },
             onOpenUrl = { url -> runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))) } }
         )
-    }
-
-    // The OpenHarmony deployment page: reached from the settings row, and from the "new
-    // machine" sheet when no runtime is deployed yet.
-    if (ohDeploy) {
-        BackHandler { ohDeploy = false }
-        app.andropaw.openharmony.OhDeployScreen(onBack = { ohDeploy = false; scope.launch { refreshOh() } })
     }
 
     // The AgentPaw chat page; its execution lives in the process-level session,
@@ -663,24 +571,6 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
     // content, and inside the grid the panel was clipped by its own card and covered by the
     // neighbouring ones.
     Box(Modifier.fillMaxSize().onGloballyPositioned { menuHostOrigin = it.boundsInRoot().topLeft }) {
-            ohCardMenu?.let { (space, anchor) ->
-                GlassDropdownPopup(
-                    show = true,
-                    onDismissRequest = { ohCardMenu = null },
-                    anchorBounds = Rect(
-                        anchor.left - menuHostOrigin.x, anchor.top - menuHostOrigin.y,
-                        anchor.right - menuHostOrigin.x, anchor.bottom - menuHostOrigin.y,
-                    ),
-                    backdrop = page.backdrop,
-                ) {
-                    GlassPopupItem(text = stringResource(R.string.rename), icon = Icons.Rounded.Edit,
-                        onClick = { ohCardMenu = null; ohRenameFor = space })
-                    GlassPopupItem(text = stringResource(R.string.reset_data), icon = Icons.Rounded.RestartAlt,
-                        onClick = { ohCardMenu = null; ohResetFor = space })
-                    GlassPopupItem(text = stringResource(R.string.delete), icon = Icons.Rounded.Delete,
-                        onClick = { ohCardMenu = null; ohDeleteFor = space })
-                }
-            }
             cardMenu?.let { (img, anchor) ->
                 GlassDropdownPopup(
                     show = true,

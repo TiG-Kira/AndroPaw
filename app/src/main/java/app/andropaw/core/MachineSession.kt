@@ -4,26 +4,17 @@ import android.view.Surface
 import java.io.File
 
 /**
- * What the operating page ([app.andropaw.ui.VmActivity]) drives: one machine, whatever is
- * underneath it.
+ * What the operating page ([app.andropaw.ui.VmActivity]) drives: one Android machine.
  *
- * Two kinds live behind this interface:
- *  - an Android machine: [GuestVm], with its shell, its radio, its adb, its recovery;
- *  - an OpenHarmony space: the [app.andropaw.openharmony] runtime, with its display and
- *    input bridges but none of the Android-only plumbing.
- *
- * The page is written once against this interface and asks [Caps] which operations exist,
- * instead of keeping two parallel copies of itself.
+ * The page is written against this interface and asks [Caps] which operations exist, so a
+ * machine that lost an operation (recovery, adb) hides the control instead of offering one
+ * that cannot work.
  *
  * State and log shapes are GuestVm's own, so the page's comparisons and its log panel need
  * no translation.
  */
 interface MachineSession {
-    enum class Kind { ANDROID, OPENHARMONY }
-
-    val kind: Kind
-
-    /** Stable id of the machine (an image id, or an OpenHarmony space id). */
+    /** Stable id of the machine (an image id). */
     val id: String
     val title: String
     val subtitle: String
@@ -38,7 +29,7 @@ interface MachineSession {
 
     /** fb0 to render through [app.andropaw.ui.GuestScreen]; null when the frame comes from a surface. */
     val fbFile: File?
-    /** The page needs a SurfaceView (GPU bridge, GL bridge, OpenHarmony display bridge). */
+    /** The page needs a SurfaceView (GPU bridge, GL bridge). */
     val needsSurface: Boolean
     /** The surface is pinned to [screenW]×[screenH] instead of following the window. */
     val surfaceFixed: Boolean
@@ -54,8 +45,8 @@ interface MachineSession {
     val input: MachineInput
     val caps: Caps
 
-    /** The Android machine behind this session; null for an OpenHarmony space. */
-    val android: GuestVm?
+    /** The Android machine behind this session. */
+    val android: GuestVm
 
     fun boot()
     fun stop()
@@ -67,7 +58,7 @@ interface MachineSession {
     fun log(s: String)
     /** Host-side log lines (the newest last). */
     fun lines(): List<String>
-    /** Guest-side log lines: logcat for Android, the runner's log for OpenHarmony. */
+    /** Guest-side log lines: the guest's logcat. */
     fun guestLog(): List<String>
     fun onState(cb: (GuestVm.State) -> Unit)
     fun onLog(cb: (String) -> Unit)
@@ -91,8 +82,7 @@ interface MachineInput {
 
 /**
  * Which operations this machine offers. The page hides what is missing instead of offering a
- * control that cannot work — an OpenHarmony space has no shell, no radio and no adb, and
- * saying so in the menu is better than a toast that says "failed".
+ * control that cannot work.
  */
 data class Caps(
     val shell: Boolean = false,
@@ -112,7 +102,6 @@ data class Caps(
  * used to hold directly.
  */
 class AndroidSession(val vm: GuestVm) : MachineSession {
-    override val kind = MachineSession.Kind.ANDROID
     override val id: String get() = vm.img.id
     override val title: String get() = vm.img.name
     override val subtitle: String get() = vm.img.displayVersion
@@ -138,7 +127,7 @@ class AndroidSession(val vm: GuestVm) : MachineSession {
         shell = true, adb = true, telephony = true, battery = true, device = true,
         installApk = true, recovery = true, vnc = true,
     )
-    override val android: GuestVm? get() = vm
+    override val android: GuestVm get() = vm
 
     override fun boot() = vm.boot()
     override fun stop() = vm.stop()
