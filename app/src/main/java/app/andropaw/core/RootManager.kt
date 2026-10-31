@@ -251,8 +251,9 @@ object RootManager {
                 f.delete()
                 continue
             }
-            val who = callerOf(paths, img.id, pid) ?: run { f.delete(); continue }
-            val cmd = runCatching { f.readText().trim() }.getOrDefault("")
+            val text = runCatching { f.readText() }.getOrDefault("")
+            val who = whoOf(paths, img.id, pid, text) ?: run { f.delete(); continue }
+            val cmd = commandOf(text)
             val apps = st.apps.toMutableList()
             val i = apps.indexOfFirst { it.pkg == who.pkg }
             val allow = if (i >= 0) !apps[i].denied else true
@@ -277,6 +278,30 @@ object RootManager {
     }
 
     private val order = compareByDescending<RootApp> { it.pending }.thenByDescending { it.requestedAt }
+
+    /**
+     * The package behind a request.
+     *
+     * The guest says who it is: its own `su` walks up /proc — where the engine fakes the
+     * process name an app sets — and writes the result as the ask file's first line. The host
+     * cannot do that walk as well, because from outside the guest the same process still
+     * carries the translator's command line; it only checks that the name looks like a package
+     * and falls back to the process tree for anything else.
+     */
+    private fun whoOf(paths: VmPaths, imageId: String, pid: Int, text: String): Who? {
+        val line = text.substringBefore('\n').removePrefix("who=")
+        val cleaned = line
+            .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == ':' || it == '-' }
+            .substringBefore(':')
+        if (cleaned.length >= 3 && cleaned.contains('.')) return Who(cleaned, uidOf(paths, imageId, cleaned))
+        return callerOf(paths, imageId, pid)
+    }
+
+    /** Everything after "cmd=" — a command may hold newlines of its own. */
+    private fun commandOf(text: String): String {
+        val at = text.indexOf("cmd=")
+        return if (at < 0) "" else text.substring(at + 4).trim()
+    }
 
     /**
      * The package behind a request.

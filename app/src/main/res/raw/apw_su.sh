@@ -85,6 +85,49 @@ if [ -n "$CMD" ]; then
   SHELL_ONLY=0
 fi
 
+# ------------------------------------------------------------------ who is asking
+# The caller is the process that ran su, and apps reach it through a shell
+# (Runtime.exec("su -c …") goes through /system/bin/sh), so a few levels are climbed while
+# what is found is a shell rather than an app. This has to be read from inside the guest: the
+# engine tells the guest its own process name, while the host sees the translator's command
+# line. Only tools 2.3 has are used — `cat`, parameter expansion, `set --`.
+name_of() {
+  if [ -r "/proc/$1/cmdline" ]; then
+    cat "/proc/$1/cmdline" 2>/dev/null
+  fi
+}
+
+parent_of() {
+  s=$(cat "/proc/$1/stat" 2>/dev/null)
+  rest=${s#*) }
+  set -- $rest
+  echo "$2"
+}
+
+WHO=""
+p=$PPID
+i=0
+while [ $i -lt 6 ]; do
+  c=$(name_of "$p")
+  case "$c" in
+    ""|*/sh|*/sh[!a-z]*|*/ash*|*/mksh*|*/ksh*|*/dash*|*/su|*/su[!a-z]*|*/toybox*|*/busybox*|*app_process*|*/init)
+      p=$(parent_of "$p")
+      ;;
+    *)
+      WHO=$c
+      break
+      ;;
+  esac
+  case "$p" in
+    ""|0|1) break ;;
+  esac
+  i=$((i+1))
+done
+# a path is not a package: leave it to the host to work out (or to give up on the name)
+case "$WHO" in
+  */*) WHO="" ;;
+esac
+
 # ------------------------------------------------------------------ ask the host
 ME=$$
 # The host looks at the ask directory a few times a second, so the answer is usually there in
@@ -94,7 +137,8 @@ NAP=0.02
 TRIES=120
 if ! sleep 0.02 2>/dev/null; then NAP=1; TRIES=8; fi
 
-echo "$CMD" > "$ASK/$ME" 2>/dev/null
+echo "who=$WHO" > "$ASK/$ME" 2>/dev/null
+echo "cmd=$CMD" >> "$ASK/$ME" 2>/dev/null
 
 ANSWER=""
 i=0
