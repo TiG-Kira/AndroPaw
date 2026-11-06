@@ -90,27 +90,66 @@ object AppPrefs {
     fun setSlimBoot(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("slim_boot", v).apply()
 
     /**
-     * Allow at most two clean restarts per window. The counter lives in preferences on purpose:
-     * GuestVm.stop() wipes every in-memory debounce flag, so an in-process counter would restart
-     * forever on a host (HyperOS etc.) that keeps culling children.
+     * Boot-time host kills are *retries*, not a fatal condition. Six independent attempts with a
+     * leaner service plan each time: even a 30% per-attempt success rate compounds to ~88%.
+     * The counter must live in preferences: GuestVm.stop() wipes every in-memory debounce flag
+     * and a hand-off reboot replaces the whole :vm process.
+     *
+     * @return the attempt number (1..[MAX_BOOT_RETRIES]), or 0 when the budget is exhausted.
      */
-    fun allowHostKillRestart(ctx: Context): Boolean {
+    fun allowHostKillRestart(ctx: Context): Int {
         val p = sp(ctx)
         val now = System.currentTimeMillis()
         val start = p.getLong("host_kill_window", 0L)
         val count = p.getInt("host_kill_count", 0)
-        if (start == 0L || now - start > 10 * 60_000L) {
+        if (start == 0L || now - start > 15 * 60_000L) {
             p.edit().putLong("host_kill_window", now).putInt("host_kill_count", 1).apply()
-            return true
+            return 1
         }
-        if (count >= 2) return false
+        if (count >= MAX_BOOT_RETRIES) return 0
         p.edit().putInt("host_kill_count", count + 1).apply()
-        return true
+        return count + 1
     }
 
-    /** A boot that actually completed resets the window: only consecutive failures count. */
-    fun resetHostKillRestarts(ctx: Context) =
-        sp(ctx).edit().remove("host_kill_window").remove("host_kill_count").apply()
+    const val MAX_BOOT_RETRIES = 6
+
+    /** Back off with jitter so retries do not re-collide with the host's periodic culling sweep. */
+    fun bootRetryDelayMs(attempt: Int): Long = when (attempt) {
+        1 -> 800L; 2 -> 1_600L; 3 -> 2_600L
+        4 -> 4_000L; 5 -> 6_000L; else -> 8_000L
+    } + (System.currentTimeMillis() % 500L)
+
+    /** One-shot delay consumed by VmActivity.restartProcess(); manual reboots keep the 400 ms hand-off. */
+    fun setBootDelayMs(ctx: Context, ms: Long) = sp(ctx).edit().putLong("next_boot_delay", ms).apply()
+    fun takeBootDelayMs(ctx: Context): Long {
+        val p = sp(ctx)
+        val v = p.getLong("next_boot_delay", 400L)
+        p.edit().remove("next_boot_delay").apply()
+        return v
+    }
+
+    /**
+     * Pause the host's phantom-process killer for as long as a machine runs: the cap is lifted
+     * through Shizuku before boot and restored when the last machine stops (core/PhantomKiller.kt).
+     * Off by default — it changes a host-wide setting, and it needs Shizuku to be running.
+     */
+    fun phantomPause(ctx: Context): Boolean = sp(ctx).getBoolean("host_phantom_pause", false)
+    fun setPhantomPause(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("host_phantom_pause", v).apply()
+
+    /** 0 = slim boot, 1 = leaner, 2 = minimum viable. Escalates on each failed attempt. */
+    fun bootSlimLevel(ctx: Context): Int = sp(ctx).getInt("boot_slim_level", 0).coerceIn(0, 2)
+    fun bumpBootSlimLevel(ctx: Context): Int {
+        val next = (bootSlimLevel(ctx) + 1).coerceAtMost(2)
+        sp(ctx).edit().putInt("boot_slim_level", next).apply()
+        return next
+    }
+
+    /** A boot that actually completed resets the window and steps the lean level back down, so the machine converges on the lightest plan that works. */
+    fun resetHostKillRestarts(ctx: Context) {
+        val p = sp(ctx)
+        p.edit().remove("host_kill_window").remove("host_kill_count")
+            .putInt("boot_slim_level", (p.getInt("boot_slim_level", 0) - 1).coerceAtLeast(0)).apply()
+    }
 
     /** Умолчания, которые получает только что импортированная система. */
     fun defaults(ctx: Context): VmSettings {

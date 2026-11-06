@@ -19,6 +19,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,9 +39,13 @@ import app.andropaw.AppPrefs
 import app.andropaw.BuildConfig
 import app.andropaw.R
 import app.andropaw.core.HostInfo
+import app.andropaw.core.HostShell
+import app.andropaw.core.PhantomKiller
 import app.andropaw.core.ProFeatures
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Terminal
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.RadioButton
@@ -67,6 +72,7 @@ fun SettingsContent(
     var langDialog by remember { mutableStateOf(false) }
     var agentSettings by remember { mutableStateOf(false) }
     var phantomGuide by remember { mutableStateOf(false) }
+    var shizukuGuide by remember { mutableStateOf(false) }
     var proFeaturesDialog by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
@@ -88,6 +94,18 @@ fun SettingsContent(
             var autoRestart by remember { mutableStateOf(AppPrefs.hostKillAutoRestart(ctx)) }
             var guestStubs by remember { mutableStateOf(AppPrefs.guestStubsEnabled(ctx)) }
             var slimBoot by remember { mutableStateOf(AppPrefs.slimBoot(ctx)) }
+            var pauseKiller by remember { mutableStateOf(AppPrefs.phantomPause(ctx)) }
+            // Shizuku 是另一个应用里的服务，随时可能起来 / 掉线 / 被授权。页面停留期间低频轮询，
+            // 用户不用退出去重进才看到状态变化。
+            var shizuku by remember { mutableStateOf(HostShell.state(ctx)) }
+            var armed by remember { mutableStateOf(PhantomKiller.isArmed(ctx)) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(1500)
+                    shizuku = HostShell.state(ctx)
+                    armed = PhantomKiller.isArmed(ctx)
+                }
+            }
             val pm = ctx.getSystemService(android.os.PowerManager::class.java)
             val batteryOk = pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
             val phantom = HostInfo.phantomState(ctx)
@@ -104,6 +122,43 @@ fun SettingsContent(
                     startAction = { Icon(Icons.Rounded.Tune, null, tint = MiuixTheme.colorScheme.primary) },
                     onClick = { phantomGuide = true },
                 )
+                ArrowPreference(
+                    title = stringResource(R.string.host_shizuku),
+                    summary = stringResource(when (shizuku) {
+                        HostShell.State.READY -> R.string.host_shizuku_ready
+                        HostShell.State.NEEDS_PERMISSION -> R.string.host_shizuku_no_perm
+                        HostShell.State.NOT_RUNNING -> R.string.host_shizuku_not_running
+                        HostShell.State.NOT_INSTALLED -> R.string.host_shizuku_missing
+                    }),
+                    startAction = { Icon(Icons.Rounded.Terminal, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = {
+                        when (shizuku) {
+                            HostShell.State.READY -> Unit
+                            HostShell.State.NEEDS_PERMISSION -> if (!HostShell.requestPermission()) shizukuGuide = true
+                            else -> shizukuGuide = true
+                        }
+                    },
+                )
+                Toggle(
+                    stringResource(R.string.host_phantom_pause),
+                    stringResource(
+                        when {
+                            !PhantomKiller.supported() -> R.string.host_phantom_pause_na
+                            armed -> R.string.host_phantom_armed
+                            else -> R.string.host_phantom_pause_sub
+                        }
+                    ),
+                    pauseKiller,
+                ) { on ->
+                    pauseKiller = on
+                    AppPrefs.setPhantomPause(ctx, on)
+                    // 开关本身只是「下次开机时试试」；Shizuku 没就绪就先把话说明白，
+                    // 免得用户以为打开了就已经解决
+                    if (on && shizuku != HostShell.State.READY) {
+                        if (shizuku == HostShell.State.NEEDS_PERMISSION && HostShell.requestPermission()) Unit
+                        else shizukuGuide = true
+                    }
+                }
                 ArrowPreference(
                     title = stringResource(R.string.host_battery_title),
                     summary = stringResource(if (batteryOk) R.string.host_battery_off else R.string.host_battery_on),
@@ -275,6 +330,27 @@ fun SettingsContent(
                         android.widget.Toast.LENGTH_SHORT).show()
                 }),
                 DialogAction(stringResource(R.string.done), onClick = { phantomGuide = false }),
+            ))
+        }
+    }
+
+    if (shizukuGuide) {
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.host_shizuku_guide_title),
+            onDismissRequest = { shizukuGuide = false },
+        ) {
+            Text(stringResource(R.string.host_shizuku_guide), fontSize = 13.sp, lineHeight = 19.sp)
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.host_shizuku_open), onClick = {
+                    val launch = runCatching { ctx.packageManager.getLaunchIntentForPackage(HostShell.PKG) }.getOrNull()
+                    runCatching {
+                        if (launch != null) ctx.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        else ctx.startActivity(Intent(Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://shizuku.rikka.app/")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                }),
+                DialogAction(stringResource(R.string.done), onClick = { shizukuGuide = false }),
             ))
         }
     }

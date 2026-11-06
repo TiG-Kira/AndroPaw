@@ -352,7 +352,7 @@
     <string name="pro_guard_conservative">Safety</string>
     <string name="pro_guard_standard">Standard</string>
     <string name="pro_guard_aggressive">Background</string>
-    <string name="pro_guard_hint">Takes effect the next time a machine starts. Safety swaps out earliest (14/18), Background latest (24/28). Pick Safety on hosts that keep killing the guest; all levels also cap cached apps inside the guest and disable the USAP pool.</string>
+    <string name="pro_guard_hint">Takes effect next boot. Safety reclaims earliest (14/18), Background latest (24/28). The budget is clamped to what is actually reclaimable: core services and HALs are never killed. All levels also cap cached apps inside the guest and disable the USAP pool.</string>
     <string name="pro_features_row">Pro capabilities</string>
     <string name="pro_features_row_sub">%1$d capabilities registered</string>
     <string name="pro_features_title">Pro capabilities</string>
@@ -398,8 +398,8 @@
 
     <string name="vm_host_kill_restart">Host killed emulator processes — restarting the whole machine…</string>
     <string name="vm_host_kill_give_up">Host keeps killing emulator processes; automatic restart stopped. Please start the machine manually.</string>
-    <string name="host_autorestart">Restart after host kills processes</string>
-    <string name="host_autorestart_sub">Only during the very first boot: one clean whole-machine restart (max 2 in 10 min). After boot, the app asks you before restarting.</string>
+    <string name="host_autorestart">Retry boot after host kills processes</string>
+    <string name="host_autorestart_sub">First boot only: up to 6 automatic retries, each with fewer services and a longer back-off. After boot, the app asks you before restarting.</string>
 
     <string name="host_slim_boot">Slim boot (fewer processes)</string>
     <string name="host_slim_boot_sub">Start diagnostic and statistics services only when the guest asks for them (ctl.start). Cuts the ~40 processes an Android 17 image forks at boot. Turn off if a firmware refuses to boot.</string>
@@ -407,4 +407,22 @@
     <string name="host_copied">adb command copied</string>
     <string name="host_guest_stubs">Guest Java stand-in services</string>
     <string name="host_guest_stubs_sub">Off by default. These five app_process helpers never loaded (a class-name mismatch made them abort with 134) and each costs a host process slot. Turn on only if Bluetooth, network or APEX registration is needed.</string>
+
+    <string name="host_shizuku">Shizuku</string>
+    <string name="host_shizuku_ready">Ready — can lift the host process cap</string>
+    <string name="host_shizuku_no_perm">Installed, not authorised — tap to allow</string>
+    <string name="host_shizuku_not_running">Installed, service not running — tap for how to start it</string>
+    <string name="host_shizuku_missing">Not installed — tap to open its website</string>
+    <string name="host_shizuku_guide_title">Starting Shizuku</string>
+    <string name="host_shizuku_open">Open Shizuku</string>
+    <string name="host_shizuku_guide">Shizuku runs a shell (uid 2000) for apps that ask politely. It is not root and does not need root.\n\n1. Install Shizuku from its website or the app store.\n2. Start it: Developer options → Wireless debugging → pair, then 「Start via wireless debugging」 inside Shizuku. On a rooted device the root start method also works.\n3. Come back here and allow this app when Shizuku asks.\n\nShizuku stops when the device reboots; start it again afterwards.\n\nOnce it is ready, the switch above lifts the host cap to 2147483647 before a machine boots and restores your original value when the last machine stops. That value lives in device_config — it is what 「Disable child process restrictions」 in developer options does NOT change.</string>
+    <string name="host_phantom_pause">Pause the host process killer while running</string>
+    <string name="host_phantom_pause_sub">Through Shizuku: raises the host cap to 2147483647 before a machine boots and puts your original value back when it stops. Needs Shizuku to be running.</string>
+    <string name="host_phantom_pause_na">Needs an Android 12+ host</string>
+    <string name="host_phantom_armed">Lifted for this run — the original value comes back when the machine stops</string>
+
+    <string name="phantom_toast_paused">Host process cap lifted through Shizuku (restored when the machine stops)</string>
+    <string name="phantom_toast_failed">Shizuku could not lift the host process cap — the machine may still be killed in batches</string>
+    <string name="phantom_toast_no_shizuku">Shizuku is not ready: the host still caps this app at 32 child processes</string>
+    <string name="phantom_toast_over_budget">%1$d resident services exceed the host process budget — this boot can still be culled in one batch. Settings → Pause the host process killer fixes it for good.</string>
 </resources>

@@ -36,10 +36,26 @@ private val SLIM_ON_DEMAND = setOf(
     "mediaextractor", "statsd", "credstore", "media.codec", "media.metrics",
 )
 
-/** Native arm64 engine: vendor daemons that only poll hardware the phone does not have (modem, DSP, TrustZone). */
-private val N64_SKIP = setOf("audiod", "ATFWD-daemon", "imsqmidaemon", "loc_launcher", "cnd", "dpmd", "cnss-daemon",
+/**
+ * Level 1: extra services deferred after the first failed boot. Never list a core service here
+ * (netd / installd / keystore / drmserver / mediaserver): they are optional=false for a reason
+ * and system_server waits for them without a timeout.
+ */
+private val SLIM_ON_DEMAND_MORE = setOf(
+    "bootanim", "gatekeeper", "cameraserver", "media.extractor", "media.codec",
+)
+
+/** Native arm64 engine: vendor daemons that only poll hardware the phone does not have (modem, DSP, TrustZone). */private val N64_SKIP = setOf("audiod", "ATFWD-daemon", "imsqmidaemon", "loc_launcher", "cnd", "dpmd", "cnss-daemon",
     "tftp_server", "qcom-system-daemon", "hvdcp_opti", "pm-service", "mtd", "mlipayd", "vsimd", "fdpp", "perfd", "ipacm",
     "qti", "netmgrd", "port-bridge", "ims_rtp_daemon", "imsdatadaemon", "wcnss_service", "msm_irqbalance", "energy-awareness", "sscrpcd", "adsprpcd", "cdsprpcd", "audioadsprpcd")
+
+/**
+ * 宿主能给本应用多少个子进程。Android 12+ 的 phantom 上限默认 32，留 3 个给 ctl.start 临时拉起的
+ * 进程和 WebView 的 zygote。超过这个数，system_server 会按父进程 oom_adj 从差到好整批 SIGKILL
+ * （日志里的 code 137）——所以开机计划必须在这个预算以内，而不是「先试试看」。
+ * Shizuku 把上限抬走之后这个预算不生效（[GuestVm.phantomCapLifted]）。
+ */
+private const val HOST_PROCESS_BUDGET = 29
 
 /**
  * Одна запущенная виртуальная машина. Живёт в процессе :vm (одна на процесс: GL-мост нельзя
@@ -86,10 +102,50 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // Slim boot: leave the diagnostics to ctl.start. GuestService.onDemand is already
         // honoured by doBoot()/replayServicePlan() while startService() ignores it, so the
         // on-demand path is a complete swap-in mechanism, not a removal.
-        if (app.andropaw.AppPrefs.slimBoot(ctx)) list.map { svc ->
-            if (svc.name in SLIM_ON_DEMAND && !svc.name.contains("-hal-")) svc.copy(onDemand = true) else svc
-        } else list
+        var out = list
+        // Shizuku 已经把宿主上限抬走时，杀进程的机制根本不存在了 —— 这时候再砍服务只是白白让
+        // 系统变得残缺。完整计划优先。
+        if (app.andropaw.AppPrefs.slimBoot(ctx) && !phantomCapLifted) {
+            // 按预算选档，而不是「先试最宽的档、被宿主杀两次再收敛」：那两次开机注定失败，
+            // 用户看到的就是「每次开机都要死一次」。三个档位的进程数是开机前就能算出来的，
+            // 直接挑第一个装得下的档，第一次就有机会成功。
+            val ladder = (0..2).map { applySlimLevel(out, it) }
+            val byBudget = ladder.indexOfFirst { p -> residentCount(p) <= HOST_PROCESS_BUDGET }
+                .let { if (it < 0) 2 else it }
+            // 历史失败（宿主上限其实比 32 更低、或者有别的清理器）只能把档位往更狠的方向推。
+            val level = maxOf(byBudget, app.andropaw.AppPrefs.bootSlimLevel(ctx))
+            out = applySlimLevel(out, level)
+            log("service plan: ${residentCount(ladder[0])}/${residentCount(ladder[1])}/${residentCount(ladder[2])} " +
+                "resident processes at level 0/1/2, host budget $HOST_PROCESS_BUDGET → level $level")
+        }
+        out
     }.getOrNull() ?: img.services.ifEmpty { InitPlan.fallback(img, paths.root) }
+
+    /**
+     * 一个精简档位下会常驻多少个宿主进程。
+     *
+     * phantom killer 数的是**常驻进程数**（每个 guest 服务都是宿主里一个真实进程），不是 fork 频率，
+     * 所以这个数字就是判据：只要 ≤ 宿主上限，它就永远不动手。
+     */
+    private fun residentCount(plan: List<GuestService>): Int = plan.count { !it.onDemand }
+
+    /** 把完整计划裁到某个精简档位：0 只砍诊断类，1 再加一批，2 砍掉全部可选非 HAL 服务并去掉 32 位 zygote。 */
+    private fun applySlimLevel(list: List<GuestService>, level: Int): List<GuestService> {
+        val defer: Set<String>? = when (level) {
+            0 -> SLIM_ON_DEMAND
+            1 -> SLIM_ON_DEMAND + SLIM_ON_DEMAND_MORE
+            else -> null   // L2: every optional non-HAL service
+        }
+        var out = list.map { svc ->
+            val drop = !svc.name.contains("-hal-") &&
+                (defer?.let { svc.name in it } ?: (svc.optional && svc.name !in ALWAYS_RESTART))
+            if (drop) svc.copy(onDemand = true) else svc
+        }
+        // The 32-bit zygote is the first to abort (134) on a rebuild and is rarely needed by
+        // a 64-bit firmware. Only the last-resort level drops its process slot.
+        if (level >= 2) out = out.filter { it.name != "zygote_secondary" }
+        return out
+    }
     private var zygoteRestarts = 0
         private set
     @Volatile var failure: String? = null
@@ -152,6 +208,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     /** the phone's cameras for the guest (camera HAL → /dev/socket/aemu_cam) */
     val camera = CameraFeed(ctx, paths, ::log)
     @Volatile private var lmk: GuestLmk? = null
+    /** 250 ms rolling pre-mortem; dumped on every zygote exit so a 137 can be attributed. */
+    private val forensics = ExitForensics { captureForensics() }
     val net = NetProxy(ctx, paths, ::log)
     private val dns = DnsProxy(paths, img.api, img.engine == Engine.N64 && Kernel64.forApi(img.api).dnsLayoutProbe, ::log)
     val runner by lazy { GuestRunner(paths, img) }
@@ -170,10 +228,61 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     // ------------------------------------------------------------------ загрузка
 
+    /** 本次运行里是否已经对宿主动过手（arm 有了明确结论，重试时不再重复写）。 */
+    @Volatile private var phantomArmed = false
+
+    /** 宿主上限真的抬上去了：这时 slim boot 就没有意义了（没有杀手要绕），开机可以按完整的服务计划走。 */
+    @Volatile private var phantomCapLifted = false
+
+    /**
+     * 宿主 Android 12+ 按「应用 fork 出的进程总数 > 32」整批 SIGKILL。guest 开机就有 40 个左右，
+     * 软件侧删不到 32 以下，所以真正管用的只有把宿主上限抬走 —— 通过 Shizuku（shell）写
+     * `device_config put activity_manager max_phantom_processes`。退出时 PhantomKiller 会还原。
+     */
+    private fun armPhantomPause() {
+        if (phantomArmed) return
+        val r = runCatching { PhantomKiller.arm(ctx) }.getOrNull() ?: return
+        // Shizuku 没就绪不算「有了结论」：用户可能在重试间隙把它启动了，下一轮再试。
+        if (r != PhantomKiller.Arm.NO_SHIZUKU) phantomArmed = true
+        when (r) {
+            PhantomKiller.Arm.PAUSED, PhantomKiller.Arm.ALREADY -> {
+                phantomCapLifted = true
+                if (r == PhantomKiller.Arm.PAUSED) {
+                    log("host phantom-process cap lifted through Shizuku (max_phantom_processes=${PhantomKiller.UNLIMITED})")
+                    toast(ctx.getString(app.andropaw.R.string.phantom_toast_paused))
+                } else {
+                    log("host phantom-process cap already lifted for this run")
+                }
+            }
+            PhantomKiller.Arm.FAILED -> {
+                log("✖ Shizuku could not lift the host phantom-process cap")
+                toast(ctx.getString(app.andropaw.R.string.phantom_toast_failed))
+            }
+            PhantomKiller.Arm.NO_SHIZUKU -> {
+                log("host phantom-process cap unchanged: Shizuku is not ready")
+                toast(ctx.getString(app.andropaw.R.string.phantom_toast_no_shizuku))
+            }
+            PhantomKiller.Arm.OFF, PhantomKiller.Arm.NOT_APPLICABLE -> Unit
+        }
+    }
+
+    /** 后台线程上的 Toast：`:vm` 有自己的主 Looper，但从 boot 线程直接弹会崩。 */
+    private fun toast(msg: String) {
+        runCatching {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     fun boot() {
         if (state == State.BOOTING || state == State.RUNNING || state == State.PREPARING) return
         stopping = false
         failure = null
+        // 必须在第一个 guest 进程 fork 之前抬上限：宿主 phantom killer 是按数量批量杀的，
+        // 开机头几十秒的 fork 高峰正是它动手的时候。
+        armPhantomPause()
+        forensics.start()
         setState(State.PREPARING)
         try {
             if (recoveryMode) doRecovery() else doBoot()
@@ -572,7 +681,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             if (kernel.ramBudget) f.writeText((GuestRunner.guestRamMb(img.api, s.ramMb) * 1024L).toString()) else f.delete()
         }
         val guard = ProFeatures.GuardLevel.of(app.andropaw.AppPrefs.proGuardLevel(ctx))
-        lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb, guard.warn, guard.safe).also { it.start() }
+        // Shizuku 已经把宿主 phantom 上限抬走：进程数不再是威胁，护栏再换出服务只会让系统变残。
+        val cap = if (phantomCapLifted) Int.MAX_VALUE else guard.warn
+        lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb, cap, if (phantomCapLifted) Int.MAX_VALUE else guard.safe).also { it.start() }
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
         runner.sdcardHost = sd
         val r = GuestRunner(paths, img, netCfg.copy(glPath = if (s.gpu) "/dev/socket/gl" else null)).also {
@@ -650,11 +761,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         }.map { it.name }.toSet()
         lmk?.swappablePids = ::swappableServicePids
         lmk?.onSwappedOut = ::markGuardSwap
+        lmk?.bootCompleted = { bootDoneAt > 0 }
+        lmk?.fixedFloor = ::fixedProcessFloor
         if (swappableNames.isNotEmpty()) log("process budget: ${swappableNames.size} optional service(s) may be swapped out on demand")
         val deferred = plan.count { it.onDemand }
-        log("slim boot: ${plan.size - deferred} service(s) at boot, $deferred on demand via ctl.start (host ceiling ${GuestLmk.PHANTOM_PROCESS_LIMIT})")
-        if (plan.size - deferred >= GuestLmk.PHANTOM_PROCESS_LIMIT)
-            log("⚠ 开机固定服务数已接近/超过宿主上限，软件侧护栏无法再压缩；请在设置页查看「子进程限制」里的 adb 方案")
+        val resident = plan.count { !it.onDemand }
+        log("slim boot: ${resident} resident service(s) at boot, $deferred on demand via ctl.start " +
+            "(host budget $HOST_PROCESS_BUDGET, phantom ceiling ${GuestLmk.PHANTOM_PROCESS_LIMIT}, shizuku=${phantomCapLifted})")
+        if (resident > HOST_PROCESS_BUDGET && !phantomCapLifted) {
+            // 说出来，别让用户以为「已经尽力了」：这时候 137 是必然，只是早晚。
+            log("⚠ 开机常驻进程 $resident 已超过宿主预算 $HOST_PROCESS_BUDGET —— 没有 Shizuku 也没有调高 " +
+                "device_config 时，这一轮仍会被整批杀掉。设置页「运行期间暂停宿主进程杀手」可以根治。")
+            toast(ctx.getString(app.andropaw.R.string.phantom_toast_over_budget, resident))
+        }
         var glDone = false
         // (debugging, see Kernel64.syncLog: only the first N services are started, then the guest is left as it is)
         val stopAfter = if (engine == Engine.N64 && kernel.syncLog) runCatching { File(paths.root, "dev/.aemu-stop-after").readText().trim().toInt() }.getOrNull() else null
@@ -905,6 +1024,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         procs.filterKeys { it in swappableNames && it !in guardHotServices }
             .mapNotNull { GuestProcesses.pid(it.value) }
             .filter { it > 1 }.toSet()
+    }
+
+    /** Processes the guard must never reclaim: everything not in the optional set, plus zygote children it cannot see. */
+    private fun fixedProcessFloor(): Int = synchronized(procs) {
+        procs.entries.count { (name, p) -> p.isAlive && name !in swappableNames } + 3
     }
 
     /** A guard kill is ours, not the host's: remember the name before the watchdog sees its exit code. */
@@ -1962,13 +2086,22 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (externalKillHandled) return HostKillOutcome.RESTART_HANDLED
         if (!app.andropaw.AppPrefs.hostKillAutoRestart(ctx)) return HostKillOutcome.NOT_OURS
         externalKillHandled = true
-        val allowed = app.andropaw.AppPrefs.allowHostKillRestart(ctx)
-        val action = if (allowed) "clean whole-machine restart during first boot" else "restart limit reached, stopping"
-        log("✖ $where: external SIGKILL (137), guestProcesses=${lmk?.processCount ?: 0}/${GuestLmk.PHANTOM_PROCESS_LIMIT} — $action")
-        if (allowed) runCatching { onPower?.invoke(true, "host kill restart") }
-        else {
-            failure = "host keeps killing guest processes; automatic restart limit reached"
+        val attempt = app.andropaw.AppPrefs.allowHostKillRestart(ctx)
+        val peak = lmk?.processCount ?: 0
+        if (attempt == 0) {
+            log("✖ $where: external SIGKILL (137), guestProcesses=$peak/${GuestLmk.PHANTOM_PROCESS_LIMIT} — " +
+                "boot retry budget (${app.andropaw.AppPrefs.MAX_BOOT_RETRIES}) exhausted, stopping")
+            failure = "host keeps killing guest processes during boot; all retries used a leaner plan each time"
             runCatching { onPower?.invoke(false, "host kill give up") }
+        } else {
+            // Each retry is a fresh :vm process with a leaner service plan and a longer back-off,
+            // so a culling sweep that hits one attempt does not necessarily hit the next one.
+            val level = app.andropaw.AppPrefs.bumpBootSlimLevel(ctx)
+            val delay = app.andropaw.AppPrefs.bootRetryDelayMs(attempt)
+            log("✖ $where: external SIGKILL (137), guestProcesses=$peak/${GuestLmk.PHANTOM_PROCESS_LIMIT} — " +
+                "boot retry $attempt/${app.andropaw.AppPrefs.MAX_BOOT_RETRIES}, next slim level $level, in ${delay}ms")
+            app.andropaw.AppPrefs.setBootDelayMs(ctx, delay)
+            runCatching { onPower?.invoke(true, "host kill restart") }
         }
         return HostKillOutcome.RESTART_HANDLED
     }
@@ -2017,6 +2150,38 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         } else log("zygote rebuild: primary socket never came up, skipping zygote_secondary")
     }
 
+    /** One pre-mortem sample: everything a non-root app is allowed to read about the host state. */
+    private fun captureForensics(): ExitForensics.Sample {
+        val zpid = synchronized(procs) { procs["zygote"]?.let { GuestProcesses.pid(it) } }
+        val zAdj = zpid?.let { runCatching { File("/proc/$it/oom_score_adj").readText().trim().toInt() }.getOrNull() }
+        val zRss = zpid?.let { runCatching {
+            File("/proc/$it/statm").readText().split(' ')[1].toLong() * 4 / 1024
+        }.getOrDefault(-1L) } ?: -1L
+        var avail = -1L
+        var swap = -1L
+        runCatching {
+            File("/proc/meminfo").useLines { lines ->
+                for (l in lines) {
+                    val kb = l.split(Regex("\\s+")).getOrNull(1)?.toLongOrNull() ?: continue
+                    if (l.startsWith("MemAvailable:")) avail = kb / 1024
+                    else if (l.startsWith("SwapFree:")) swap = kb / 1024
+                }
+            }
+        }
+        return ExitForensics.Sample(
+            at = System.currentTimeMillis(),
+            guestProcesses = lmk?.processCount ?: 0,
+            zygoteAdj = zAdj,
+            zygoteRssMb = zRss,
+            availMb = avail,
+            swapMb = swap,
+            lmkKills = lmk?.kills ?: 0,
+            frozen = lmk?.frozenCount ?: 0,
+            bootDone = bootDoneAt > 0,
+            planned = plannedRestart || zygoteKillReason != null,
+        )
+    }
+
     private fun logZygoteExit(name: String, code: Int) {
         val memory = runCatching {
             File("/proc/meminfo").useLines { lines ->
@@ -2034,12 +2199,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             "requestedKill=${zygoteKillReason ?: "none"} hostAdj=$hostAdj guestLmkKills=${lmk?.kills ?: 0} " +
             "guestProcesses=$children/${GuestLmk.PHANTOM_PROCESS_LIMIT}; $memory")
         if (tail.isNotBlank()) log("zygote-exit: last output: $tail")
-        // A SIGKILL with a full child-process table and plenty of free RAM is the signature of
-        // Android 12+'s Phantom Process Killer, not of the host low-memory killer. Say so in the
-        // log: the fix is a host setting, and without this line users keep chasing OOM theories.
+        // The rolling pre-mortem replaces the old single-point guess: it shows the 2-3 s before
+        // the kill (adj, RSS, MemAvailable, process count, guard activity) and classifies it.
+        runCatching { log(forensics.dump(name, code)) }
         if (code == 137 && zygoteKillReason == null && children >= GuestLmk.PHANTOM_SAFE_LIMIT) {
-            log("zygote-exit: 子进程数已达宿主上限，且并非我们主动重启 → 大概率是 Android 12+ 幽灵进程杀手（Phantom Process Killer，32 子进程限制）按 uid 成批 SIGKILL，与剩余内存无关。" +
-                "请保持「开发者选项」开启并打开「停止限制子进程 / Disable child process restrictions」；部分 ColorOS/OriginOS 需 adb 执行 settings put global settings_enable_monitor_phantom_procs false")
+            log("zygote-exit: 处理办法见 设置 → 宿主兼容性 → 子进程限制（内含提高宿主进程上限的 adb 命令与一键复制）")
         }
         if (name == "zygote") zygoteKillReason = null
     }
@@ -2086,6 +2250,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     fun stop() {
         if (state == State.STOPPED) return
         stopping = true
+        forensics.stop()
         frozenAnnounced = false
         zygoteRebootTried = false
         sweepRebootTried = false
@@ -2101,6 +2266,11 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         adb.stop(); props.stop(); input.stop(); frames.stop(); ril.stop(); vold.stop(); audio.stop(); net.stop(); dns.stop(); events.stop(); logd.stop(); lights.stop(); sensors.stop(); mic.stop(); camera.stop(); GlHost.stop()
         extraStubs.forEach { it.stop() }; extraStubs.clear()
         lmk?.stop(); lmk = null
+        // guest 进程全没了才还原宿主设置：还原太早，残留进程还会再被 phantom killer 清一遍
+        if (phantomArmed) {
+            phantomArmed = false
+            runCatching { PhantomKiller.disarm(ctx) }
+        }
         // nothing will answer `su` from this machine any more, and nothing should
         RootManager.unwatch(img.id)
         Keeper.release(ctx)

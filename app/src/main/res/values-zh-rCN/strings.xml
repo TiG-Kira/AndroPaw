@@ -351,7 +351,7 @@
     <string name="pro_guard_conservative">安全优先</string>
     <string name="pro_guard_standard">标准</string>
     <string name="pro_guard_aggressive">后台优先</string>
-    <string name="pro_guard_hint">下次启动模拟器时生效。安全优先 = 最早回收（14/18），后台优先 = 最晚回收（24/28）；宿主频繁杀进程时请选「安全优先」。所有档位都会压低 guest 自身的后台应用上限并关闭 USAP 进程池。</string>
+    <string name="pro_guard_hint">下次启动生效。安全优先 = 最早回收（14/18），后台优先 = 最晚回收（24/28）。阈值会自动让位于不可回收的核心服务 / HAL，不会在开机阶段破坏启动。所有档位都会压低 guest 缓存应用上限并关闭 USAP 进程池。</string>
     <string name="pro_features_row">Pro 能力清单</string>
     <string name="pro_features_row_sub">已注册 %1$d 项能力</string>
     <string name="pro_features_title">Pro 能力清单</string>
@@ -397,8 +397,8 @@
 
     <string name="vm_host_kill_restart">宿主终止了模拟器进程，正在整机重启…</string>
     <string name="vm_host_kill_give_up">宿主持续终止模拟器进程，已停止自动重启，请手动启动</string>
-    <string name="host_autorestart">宿主杀死进程时自动重启</string>
-    <string name="host_autorestart_sub">仅在最初开机阶段遇到外部 SIGKILL 时自动整机重启（10 分钟内最多 2 次）；开机完成后会弹出「等待自救 / 冷重启」让你确认。</string>
+    <string name="host_autorestart">开机失败时自动重试</string>
+    <string name="host_autorestart_sub">仅最初开机阶段：最多 6 次自动重试，每次进一步减少开机进程数并延长间隔；开机完成后会弹出「等待自救 / 冷重启」让你确认。</string>
 
     <string name="host_slim_boot">精简启动（减少开机进程）</string>
     <string name="host_slim_boot_sub">诊断 / 统计类服务改为按需启动（ctl.start），把 Android 17 开机时约 40 个进程压下来。若某固件因此无法开机，关掉此项。</string>
@@ -406,4 +406,22 @@
     <string name="host_copied">adb 命令已复制</string>
     <string name="host_guest_stubs">guest Java 占位服务</string>
     <string name="host_guest_stubs_sub">默认关闭。这 5 个 app_process 占位进程因类名不匹配从未加载成功（秒退 134），却各占一个宿主进程配额；仅在需要蓝牙 / 网络 / APEX 注册时开启。</string>
+
+    <string name="host_shizuku">Shizuku</string>
+    <string name="host_shizuku_ready">已就绪 —— 可以临时抬高宿主进程上限</string>
+    <string name="host_shizuku_no_perm">已安装，未授权 —— 点按授权</string>
+    <string name="host_shizuku_not_running">已安装，服务未运行 —— 点按查看启动方法</string>
+    <string name="host_shizuku_missing">未安装 —— 点按前往官网</string>
+    <string name="host_shizuku_guide_title">启动 Shizuku</string>
+    <string name="host_shizuku_open">打开 Shizuku</string>
+    <string name="host_shizuku_guide">Shizuku 用 shell（uid 2000）身份替应用执行命令，不是 root，也不需要 root。\n\n1. 从官网或应用商店安装 Shizuku。\n2. 启动：开发者选项 → 无线调试 → 配对，然后回到 Shizuku 里点「通过无线调试启动」。已 root 的设备也可用 root 方式启动。\n3. 回到本页，Shizuku 弹授权框时允许本应用。\n\n设备重启后 Shizuku 会停止，需要重新启动。\n\n就绪之后，上面的开关会在模拟器开机前把宿主上限抬到 2147483647，最后一台模拟器停止时写回你原来的值。这个值存在 device_config 里，正是开发者选项「停用子进程限制」改不到的那一项。</string>
+    <string name="host_phantom_pause">运行期间暂停宿主进程杀手</string>
+    <string name="host_phantom_pause_sub">通过 Shizuku：模拟器开机前把宿主上限抬到 2147483647，停止后写回原值。需要 Shizuku 处于运行状态。</string>
+    <string name="host_phantom_pause_na">需要 Android 12 以上的宿主</string>
+    <string name="host_phantom_armed">本次运行已抬升 —— 模拟器停止后自动还原原值</string>
+
+    <string name="phantom_toast_paused">已通过 Shizuku 抬高宿主进程上限（模拟器停止后还原）</string>
+    <string name="phantom_toast_failed">Shizuku 未能抬高宿主进程上限 —— 模拟器仍可能被整批杀掉</string>
+    <string name="phantom_toast_no_shizuku">Shizuku 未就绪：宿主仍会把本应用限制在 32 个子进程</string>
+    <string name="phantom_toast_over_budget">开机常驻 %1$d 个进程，超过宿主预算 —— 这一轮仍可能被整批杀。设置页开启「运行期间暂停宿主进程杀手」（需 Shizuku）可根治。</string>
 </resources>

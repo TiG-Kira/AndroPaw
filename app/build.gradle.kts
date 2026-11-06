@@ -61,9 +61,9 @@ android {
         // 28: гостевые бинарники запускаются из каталога данных приложения (W^X для targetSdk>=29)
         //noinspection ExpiredTargetSdkVersion
         targetSdk = 28
-        versionCode = 78
+        versionCode = 79
         // 0.1.0 起恢复 semver 标准三段格式（此前是 0.0.0.x 四段）
-        versionName = "0.8.3"
+        versionName = "0.8.4"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
@@ -169,6 +169,11 @@ dependencies {
         exclude(group = "org.jetbrains.compose.ui")
         exclude(group = "org.jetbrains.compose.foundation")
     }
+
+    // Shizuku: shell (uid 2000) without root. Used only to lift the host's phantom-process cap
+    // while a machine runs (core/HostShell.kt, core/PhantomKiller.kt).
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("io.coil-kt:coil-compose:2.7.0") // developer/contributor avatars on the About page

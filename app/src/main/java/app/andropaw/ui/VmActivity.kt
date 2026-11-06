@@ -832,7 +832,9 @@ class VmActivity : ComponentActivity() {
             putExtra(EXTRA_UNLOCKED, true)
         }
         val pi = android.app.PendingIntent.getActivity(this, 1, i, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_CANCEL_CURRENT)
-        (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
+        // A boot retry uses a longer, jittered delay; manual reboots keep the 400 ms hand-off.
+        val delay = app.andropaw.AppPrefs.takeBootDelayMs(this)
+        (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + delay, pi)
         finishAndRemoveTask()
         android.os.Process.killProcess(android.os.Process.myPid())
     }

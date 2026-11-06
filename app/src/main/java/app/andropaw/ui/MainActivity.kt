@@ -210,6 +210,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         askPermissions()
         handleView(intent)
+        // 上次运行如果没走到还原（进程被 LMK 打死 / 用户强杀），这里把宿主设置改回去。
+        // 后台线程：要起 Shizuku 进程，慢的时候能到秒级。没有残留就是一次空读。
+        Thread({ runCatching { app.andropaw.core.PhantomKiller.recoverStale(applicationContext) } }, "phantom-restore").start()
         setContent { ProvideNavigationEventOwner { AndroPawTheme { Library(model, onRestyle = { recreate() }) } } }
     }
 

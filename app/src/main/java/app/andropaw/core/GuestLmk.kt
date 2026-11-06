@@ -50,6 +50,8 @@ class GuestLmk(
     /** Guest processes seen by the last scan — read by the zygote-exit diagnostics. */
     @Volatile var processCount = 0
         private set
+    /** Cached apps currently parked with SIGSTOP — read by the pre-mortem sampler. */
+    val frozenCount: Int get() = frozen.size
     private var lastPhantomKillAt = 0L
     /** pids parked with SIGSTOP until the guest brings them forward or the budget needs them out */
     private val frozen = ConcurrentHashMap<Int, Long>()
@@ -65,6 +67,10 @@ class GuestLmk(
     @Volatile var swappablePids: () -> Set<Int> = { emptySet() }
     /** Notifies GuestVm that we killed one of its optional services, so the watchdog does not mistake the batch of 137s for a host cull. */
     @Volatile var onSwappedOut: (Int) -> Unit = {}
+    /** During boot the framework may still need every optional service: never swap them out then. */
+    @Volatile var bootCompleted: () -> Boolean = { true }
+    /** Processes the guard is not allowed to reclaim (core services, HALs, binder helpers). */
+    @Volatile var fixedFloor: () -> Int = { 0 }
 
     fun start() {
         running = true
@@ -295,13 +301,29 @@ class GuestLmk(
      * Framework roots are never candidates: the whole point is that trimming background apps
      * must never take zygote down with it.
      */
+    /**
+     * A fixed service floor of ~24 makes an absolute budget of 14/18 (the "Safety first" preset)
+     * permanently "over limit": the guard would then thrash every cached app and, during boot,
+     * every optional service the framework is about to use. Clamp the targets to what is actually
+     * reclaimable; when the floor alone approaches 32 the host limit cannot be met in software.
+     */
+    private fun effectiveLimits(): Pair<Int, Int> {
+        val floor = runCatching { fixedFloor() }.getOrDefault(0)
+        return warnLimit.coerceAtLeast(floor + 2) to safeLimit.coerceAtLeast(floor + 6)
+    }
+
     private fun guardPhantomProcesses(): Boolean {
         val now = System.currentTimeMillis()
         if (now - lastPhantomKillAt < PHANTOM_GUARD_GAP_MS) return false
+        val (warn, safe) = effectiveLimits()
         val (total, appCandidates) = scanGuestProcesses()
         processCount = total
-        val services = runCatching { swappablePids() }.getOrDefault(emptySet())
-            .filter { it > 1 && File("/proc/$it").exists() }
+        // Boot phase: keep the service plan intact. Fixed services are only swappable after the
+        // guest reached the home screen, otherwise the guard sabotages the boot it is protecting.
+        val services = if (runCatching { bootCompleted() }.getOrDefault(true))
+            runCatching { swappablePids() }.getOrDefault(emptySet())
+                .filter { it > 1 && File("/proc/$it").exists() }
+        else emptyList()
         // pids that disappeared on their own are no longer ours to wake
         frozen.keys.removeAll { !File("/proc/$it").exists() }
         // expire parked pids: a free slot means swap in, still over budget means swap out
@@ -309,23 +331,23 @@ class GuestLmk(
         var swapped = 0
         for ((pid, at) in frozen.toList()) {
             if (now - at < FREEZE_MAX_MS) continue
-            if (total <= warnLimit) { if (thaw(pid)) resumed++ }
+            if (total <= warn) { if (thaw(pid)) resumed++ }
             else if (thaw(pid, swapOut = true)) swapped++
         }
-        if (total <= warnLimit) {
+        if (total <= warn) {
             if (resumed > 0) log("phantom guard: $total processes — swapped $resumed app(s) back in")
             return resumed > 0
         }
         // least important first: highest adj, then the newest fork
         val apps = appCandidates.filter { !frozen.containsKey(it) }
             .sortedWith(compareByDescending<Int> { adj[it] ?: CACHED }.thenByDescending { it })
-        if (total > safeLimit) {
+        if (total > safe) {
             // Apps are cheapest to lose (zygote re-forks them on demand); optional services are
             // the last resort. Swap enough in one round to actually get back under the line —
             // a boot with ~40 services needs far more than the old batch of three.
             val parked = frozen.keys.sortedByDescending { adj[it] ?: CACHED }
             val queue = (parked + apps + services).distinct()
-            val need = (total - warnLimit).coerceIn(1, SWAP_OUT_BATCH_MAX)
+            val need = (total - warn).coerceIn(1, SWAP_OUT_BATCH_MAX)
             var swappedServices = 0
             for (pid in queue.take(need)) {
                 val wasService = pid in services
@@ -353,7 +375,8 @@ class GuestLmk(
         val minHost = if (lowRam) 2500L else MIN_HOST_MB
         val maxCached = if (ramMb > 0) (ramMb / 128).coerceIn(2, MAX_CACHED) else if (lowRam) 4 else MAX_CACHED
         while (running) {
-            Thread.sleep(if (processCount > safeLimit) 250L else if (processCount > warnLimit) 500L else 2000L)
+            val (warn, safe) = effectiveLimits()
+            Thread.sleep(if (processCount > safe) 250L else if (processCount > warn) 500L else 2000L)
             if (!running) continue
             adj.keys.removeAll { !File("/proc/$it").exists() }
             // Child-process ceiling is a host policy, not a memory condition: guard it during
