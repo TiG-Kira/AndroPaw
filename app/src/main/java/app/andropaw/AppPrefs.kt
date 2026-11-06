@@ -71,6 +71,25 @@ object AppPrefs {
     fun setHostKillAutoRestart(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("host_kill_auto_restart", v).apply()
 
     /**
+     * The five Java stand-ins (Bt/Net/Apex/StandIn/Vold) are separate app_process host processes.
+     * They never actually loaded: GuestVm asked for app.andropaw.stub.* while aemu-stubs.jar only
+     * contains app.aemu.stub.*, so every one of them aborted with 134 at boot. Default off keeps
+     * behaviour identical to that (no regression) without wasting five process slots; turning it
+     * on now uses the correct class names and restores the stand-ins for firmwares that need them.
+     */
+    fun guestStubsEnabled(ctx: Context): Boolean = sp(ctx).getBoolean("guest_java_stubs", false)
+    fun setGuestStubsEnabled(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("guest_java_stubs", v).apply()
+
+    /**
+     * Slim boot: diagnostic/statistical services are marked on-demand instead of being forked at
+     * boot. An Android 17 AOSP image starts ~41 host processes while the host caps all apps'
+     * children at 32, so the guest is culled before any memory-based guard can help. These
+     * services come back through ctl.start when the framework actually asks for them.
+     */
+    fun slimBoot(ctx: Context): Boolean = sp(ctx).getBoolean("slim_boot", true)
+    fun setSlimBoot(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("slim_boot", v).apply()
+
+    /**
      * Allow at most two clean restarts per window. The counter lives in preferences on purpose:
      * GuestVm.stop() wipes every in-memory debounce flag, so an in-process counter would restart
      * forever on a host (HyperOS etc.) that keeps culling children.

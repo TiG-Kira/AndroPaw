@@ -24,11 +24,16 @@ object ProFeatures {
      * Child-process budget for Android 12+'s Phantom Process Killer. A lower threshold keeps the
      * guest further from the host's global 32-process ceiling, at the cost of swapping cached
      * apps out more often. Read once when a machine boots.
+     *
+     * The keys are historical: "conservative" used to be the *loosest* level (24/28), which is the
+     * opposite of what the label suggests and made users pick it expecting more safety. The keys
+     * stay so existing preferences keep working, but the numbers now match the labels shown in
+     * the settings page: Safety first is the strictest, Background first the loosest.
      */
     enum class GuardLevel(val key: String, val warn: Int, val safe: Int) {
-        CONSERVATIVE("conservative", 24, 28),
+        CONSERVATIVE("conservative", 14, 18),
         STANDARD("standard", 20, 24),
-        AGGRESSIVE("aggressive", 14, 18),
+        AGGRESSIVE("aggressive", 24, 28),
         ;
 
         companion object {

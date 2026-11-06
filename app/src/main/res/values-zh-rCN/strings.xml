@@ -348,10 +348,10 @@
     <string name="pro_title">AEmulator Pro · 简化版</string>
     <string name="pro_sub">参照 AEmulator Pro 社区分支（GPL-3.0），无付费墙；这里列出它的特性并标注本版已具备哪些。每台机器的密码在机器卡片 ⋮ 菜单里设置。</string>
     <string name="pro_guard_label">子进程预算档位</string>
-    <string name="pro_guard_conservative">保守</string>
+    <string name="pro_guard_conservative">安全优先</string>
     <string name="pro_guard_standard">标准</string>
-    <string name="pro_guard_aggressive">激进</string>
-    <string name="pro_guard_hint">下次启动模拟器时生效。阈值越低越远离宿主的 32 进程上限，同时会压低 guest 自身的后台应用上限并关闭 USAP 进程池，代价是后台应用被更频繁地换出。</string>
+    <string name="pro_guard_aggressive">后台优先</string>
+    <string name="pro_guard_hint">下次启动模拟器时生效。安全优先 = 最早回收（14/18），后台优先 = 最晚回收（24/28）；宿主频繁杀进程时请选「安全优先」。所有档位都会压低 guest 自身的后台应用上限并关闭 USAP 进程池。</string>
     <string name="pro_features_row">Pro 能力清单</string>
     <string name="pro_features_row_sub">已注册 %1$d 项能力</string>
     <string name="pro_features_title">Pro 能力清单</string>
@@ -398,11 +398,12 @@
     <string name="vm_host_kill_restart">宿主终止了模拟器进程，正在整机重启…</string>
     <string name="vm_host_kill_give_up">宿主持续终止模拟器进程，已停止自动重启，请手动启动</string>
     <string name="host_autorestart">宿主杀死进程时自动重启</string>
-    <string name="host_autorestart_sub">检测到外部 SIGKILL 时做一次干净的整机重启（10 分钟内最多 2 次），不再在残缺的进程树上反复重建。</string>
+    <string name="host_autorestart_sub">仅在最初开机阶段遇到外部 SIGKILL 时自动整机重启（10 分钟内最多 2 次）；开机完成后会弹出「等待自救 / 冷重启」让你确认。</string>
 
-    <string name="host_probe_run">运行 execve 存活实验</string>
-    <string name="host_probe_run_sub">启动一个前台服务，让它用 execve 换成 shell 心跳进程；不影响模拟器。</string>
-    <string name="host_probe_result">实验结果</string>
-    <string name="host_probe_result_sub">读取 pid、存活状态、oom adj 与最近的心跳。</string>
-    <string name="host_probe_started">实验已启动 — 静置 5 分钟后打开「实验结果」</string>
+    <string name="host_slim_boot">精简启动（减少开机进程）</string>
+    <string name="host_slim_boot_sub">诊断 / 统计类服务改为按需启动（ctl.start），把 Android 17 开机时约 40 个进程压下来。若某固件因此无法开机，关掉此项。</string>
+    <string name="host_copy_adb">复制 adb 命令</string>
+    <string name="host_copied">adb 命令已复制</string>
+    <string name="host_guest_stubs">guest Java 占位服务</string>
+    <string name="host_guest_stubs_sub">默认关闭。这 5 个 app_process 占位进程因类名不匹配从未加载成功（秒退 134），却各占一个宿主进程配额；仅在需要蓝牙 / 网络 / APEX 注册时开启。</string>
 </resources>

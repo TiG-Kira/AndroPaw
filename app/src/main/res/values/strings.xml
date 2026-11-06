@@ -349,10 +349,10 @@
     <string name="pro_title">AEmulator Pro · simplified</string>
     <string name="pro_sub">Based on the AEmulator Pro community fork (GPL-3.0). No paywall: this panel lists its refinements and marks what this build already has. Set a per-machine password from the machine card menu.</string>
     <string name="pro_guard_label">Child-process budget</string>
-    <string name="pro_guard_conservative">Conservative</string>
+    <string name="pro_guard_conservative">Safety</string>
     <string name="pro_guard_standard">Standard</string>
-    <string name="pro_guard_aggressive">Aggressive</string>
-    <string name="pro_guard_hint">Applies the next time a machine starts. A lower budget keeps the guest further from the host limit of 32, caps the cached-app limit inside the guest and disables the USAP pool, but swaps background apps out more often.</string>
+    <string name="pro_guard_aggressive">Background</string>
+    <string name="pro_guard_hint">Takes effect the next time a machine starts. Safety swaps out earliest (14/18), Background latest (24/28). Pick Safety on hosts that keep killing the guest; all levels also cap cached apps inside the guest and disable the USAP pool.</string>
     <string name="pro_features_row">Pro capabilities</string>
     <string name="pro_features_row_sub">%1$d capabilities registered</string>
     <string name="pro_features_title">Pro capabilities</string>
@@ -399,11 +399,12 @@
     <string name="vm_host_kill_restart">Host killed emulator processes — restarting the whole machine…</string>
     <string name="vm_host_kill_give_up">Host keeps killing emulator processes; automatic restart stopped. Please start the machine manually.</string>
     <string name="host_autorestart">Restart after host kills processes</string>
-    <string name="host_autorestart_sub">On an outside SIGKILL, do one clean whole-machine restart (max 2 in 10 min) instead of rebuilding a half-dead process tree.</string>
+    <string name="host_autorestart_sub">Only during the very first boot: one clean whole-machine restart (max 2 in 10 min). After boot, the app asks you before restarting.</string>
 
-    <string name="host_probe_run">Run execve survival experiment</string>
-    <string name="host_probe_run_sub">Starts a foreground Service that replaces itself with a shell heartbeat. Does not touch the emulator.</string>
-    <string name="host_probe_result">Experiment result</string>
-    <string name="host_probe_result_sub">Read pid, liveness, oom adj and the last heartbeats.</string>
-    <string name="host_probe_started">Probe started — leave it for 5 minutes, then open experiment result</string>
+    <string name="host_slim_boot">Slim boot (fewer processes)</string>
+    <string name="host_slim_boot_sub">Start diagnostic and statistics services only when the guest asks for them (ctl.start). Cuts the ~40 processes an Android 17 image forks at boot. Turn off if a firmware refuses to boot.</string>
+    <string name="host_copy_adb">Copy adb command</string>
+    <string name="host_copied">adb command copied</string>
+    <string name="host_guest_stubs">Guest Java stand-in services</string>
+    <string name="host_guest_stubs_sub">Off by default. These five app_process helpers never loaded (a class-name mismatch made them abort with 134) and each costs a host process slot. Turn on only if Bluetooth, network or APEX registration is needed.</string>
 </resources>

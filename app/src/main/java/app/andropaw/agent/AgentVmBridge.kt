@@ -77,7 +77,7 @@ class AgentVmBridge(
             val text = runCatching { f.readText(Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             val cls = Regex("app_process\\S*\\s+\\S+\\s+([A-Za-z_][\\w.$]*\\.[A-Z][\\w$]*)").find(text)?.groupValues?.get(1) ?: return@forEach
             val jar = Regex("framework/([\\w.-]+\\.jar)").find(text)?.groupValues?.get(1) ?: return@forEach
-            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.andropaw.stub.Run $cls \"\$@\"; }; ")
+            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.aemu.stub.Run $cls \"\$@\"; }; ")
         }
         return sb.toString()
     }

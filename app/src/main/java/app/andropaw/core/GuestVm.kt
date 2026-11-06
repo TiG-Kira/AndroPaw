@@ -15,11 +15,26 @@ import dev.lk.m7sense.GlBridge
 import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStreamWriter
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Daemons system_server cannot live without: restarted even when init.rc marks them oneshot
  * (MIUI installd dies in the LBE security hook on start). */
 private val ALWAYS_RESTART = setOf("mediaserver", "installd", "netd", "keystore")
+
+/** Optional services the framework still leans on immediately: never hand these to the process-budget guard. */
+private val SWAPPABLE_KEEP = setOf("audioserver", "cameraserver", "keystore2", "bootanim", "gatekeeper")
+
+/**
+ * Diagnostic / statistical / one-shot-tool daemons that a Treble image declares as ordinary
+ * services. None of them is waited on without a timeout by system_server, and Android's own
+ * ctl.start path brings one back when a client asks. Not forking them at boot is the only way to
+ * get an AOSP 17 image (41 native processes) under a host that caps all children at 32.
+ */
+private val SLIM_ON_DEMAND = setOf(
+    "gpu", "idmap2d", "incidentd", "mediametrics", "storaged", "media.swcodec",
+    "mediaextractor", "statsd", "credstore", "media.codec", "media.metrics",
+)
 
 /** Native arm64 engine: vendor daemons that only poll hardware the phone does not have (modem, DSP, TrustZone). */
 private val N64_SKIP = setOf("audiod", "ATFWD-daemon", "imsqmidaemon", "loc_launcher", "cnd", "dpmd", "cnss-daemon",
@@ -66,7 +81,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             listOf("system/etc/init", "vendor/etc/init").flatMap { d -> File(root, d).listFiles()?.filter { it.name.endsWith(".rc") }?.sortedBy { it.name } ?: emptyList() } +
             // 11+: a module's services are declared inside the module (the software codec service)
             (File(root, "apex").listFiles()?.sortedBy { it.name }?.flatMap { m -> File(m, "etc").listFiles()?.filter { it.isFile && it.name.endsWith(".rc") }?.sortedBy { it.name } ?: emptyList() } ?: emptyList())
-        InitPlan.plan(InitPlan.parse(rcFiles, props), img.api, root).takeIf { p -> p.any { it.name == "zygote" } }
+        val list = InitPlan.plan(InitPlan.parse(rcFiles, props), img.api, root)
+            .takeIf { p -> p.any { it.name == "zygote" } } ?: return@runCatching null
+        // Slim boot: leave the diagnostics to ctl.start. GuestService.onDemand is already
+        // honoured by doBoot()/replayServicePlan() while startService() ignores it, so the
+        // on-demand path is a complete swap-in mechanism, not a removal.
+        if (app.andropaw.AppPrefs.slimBoot(ctx)) list.map { svc ->
+            if (svc.name in SLIM_ON_DEMAND && !svc.name.contains("-hal-")) svc.copy(onDemand = true) else svc
+        } else list
     }.getOrNull() ?: img.services.ifEmpty { InitPlan.fallback(img, paths.root) }
     private var zygoteRestarts = 0
         private set
@@ -136,6 +158,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     private val extraStubs = ArrayList<VoldStub>()
     private val procs = LinkedHashMap<String, Process>()
+    /** Optional boot services the guard may swap out when the host child-process budget is exceeded. */
+    @Volatile private var swappableNames = emptySet<String>()
+    /** service name -> time of a guard-initiated SIGKILL; the watchdog must not read those 137s as a host cull. */
+    private val guardSwaps = ConcurrentHashMap<String, Long>()
+    /** Services the guest asked for via ctl.start after a swap-out: they are demonstrably needed, so never swap them out again. */
+    private val guardHotServices = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val lazyStarts = HashMap<String, Int>()
     private val pgids = LinkedHashSet<Int>()
     @Volatile private var stopping = false
@@ -567,6 +595,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         screenUpAt = 0
         everBooted = false; zygoteRestarts = 0; zygoteCrashes.clear()
         externalKillHandled = false
+        guardSwaps.clear(); guardHotServices.clear()
         setState(State.BOOTING)
 
         // 4. binder
@@ -605,6 +634,27 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
         // 5. службы гостя по плану из init.rc прошивки
         val plan = servicePlan()
+        // The five Java stand-ins are separate app_process host processes. They used to be launched
+        // with app.andropaw.stub.* while aemu-stubs.jar only ships app.aemu.stub.*, so all of them
+        // aborted (134) within a second of boot and never provided a service. Default off keeps
+        // that behaviour with five fewer process slots; the setting turns on the corrected names.
+        val javaStubs = app.andropaw.AppPrefs.guestStubsEnabled(ctx)
+        log(if (javaStubs) "guest Java stand-ins: enabled (5 extra host processes)"
+            else "guest Java stand-ins: off — they never loaded (exit 134); saving 5 process slots")
+        // An N64 boot can have ~40 native services alive before the first app is forked, so the
+        // old guard (cached apps only) had an empty candidate list and every budget preset was a
+        // no-op. Hand it the pids of genuinely optional services as a second tier: the guest's
+        // ctl.start path brings one back when something asks for it.
+        swappableNames = plan.filter { svc ->
+            svc.optional && svc.name !in ALWAYS_RESTART && !svc.name.contains("-hal-") && svc.name !in SWAPPABLE_KEEP
+        }.map { it.name }.toSet()
+        lmk?.swappablePids = ::swappableServicePids
+        lmk?.onSwappedOut = ::markGuardSwap
+        if (swappableNames.isNotEmpty()) log("process budget: ${swappableNames.size} optional service(s) may be swapped out on demand")
+        val deferred = plan.count { it.onDemand }
+        log("slim boot: ${plan.size - deferred} service(s) at boot, $deferred on demand via ctl.start (host ceiling ${GuestLmk.PHANTOM_PROCESS_LIMIT})")
+        if (plan.size - deferred >= GuestLmk.PHANTOM_PROCESS_LIMIT)
+            log("⚠ 开机固定服务数已接近/超过宿主上限，软件侧护栏无法再压缩；请在设置页查看「子进程限制」里的 adb 方案")
         var glDone = false
         // (debugging, see Kernel64.syncLog: only the first N services are started, then the guest is left as it is)
         val stopAfter = if (engine == Engine.N64 && kernel.syncLog) runCatching { File(paths.root, "dev/.aemu-stop-after").readText().trim().toInt() }.getOrNull() else null
@@ -631,38 +681,40 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             if (svc.name == "zygote" && engine == Engine.N64 && plan.any { it.name == "apexd" })
                 waitFor("apexd", 15_000) { props.get("apexd.status") == "ready" }
             // 4.2+: заглушка bluetooth_manager до зиготы (system_server с ro.kernel.qemu=1 свою не поднимает)
-            if (svc.name == "zygote" && img.api >= 9 && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (javaStubs && svc.name == "zygote" && img.api >= 9 && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 // 2.3–4.1 look up "bluetooth" instead; without it BluetoothAdapter is null and the vendor's Bluetooth apps crash
                 val btName = if (img.api >= 17) "bluetooth_manager" else "bluetooth"
                 startService(GuestService("aemu-bt", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.BtStub", btName), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.BtStub", btName), optional = true))
             }
             // (well before zygote: apexd of 10+ looks for vold first and only then registers its own service, which the
             // package manager requires)
-            if (svc.name == "surfaceflinger" && engine == Engine.N64 && kernel.binderVold && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (javaStubs && svc.name == "surfaceflinger" && engine == Engine.N64 && kernel.binderVold && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-vold") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-vold", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.VoldStub") + (if (kernel.volumeAtUserStart) listOf("userstart") else emptyList()), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.VoldStub") + (if (kernel.volumeAtUserStart) listOf("userstart") else emptyList()), optional = true))
             }
             // 5.0–7.x: a registered network, otherwise ConnectivityService says "no active network" and browsers stay offline
-            if (svc.name == "zygote" && (if (engine == Engine.N64) kernel.registeredNetwork else img.api in 21..25) && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (javaStubs && svc.name == "zygote" && (if (engine == Engine.N64) kernel.registeredNetwork else img.api in 21..25) && engine != Engine.GB && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 synchronized(procs) { procs.remove("aemu-net") }?.let { runCatching { it.destroyForcibly() } }
                 startService(GuestService("aemu-net", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.NetStub") + (if (Kernel64.forApi(img.api).ethernetStandIn) listOf("ethernet") else emptyList()), optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.NetStub") + (if (Kernel64.forApi(img.api).ethernetStandIn) listOf("ethernet") else emptyList()), optional = true))
             }
             if (svc.name == "zygote" && engine == Engine.N64 && kernel.apexStandIn && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 apexStandInList()
-                synchronized(procs) { procs.remove("aemu-apex") }?.let { runCatching { it.destroyForcibly() } }
-                startService(GuestService("aemu-apex", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.ApexStub"), optional = true))
+                if (javaStubs) {
+                    synchronized(procs) { procs.remove("aemu-apex") }?.let { runCatching { it.destroyForcibly() } }
+                    startService(GuestService("aemu-apex", listOf("/system/bin/app_process",
+                        "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.ApexStub"), optional = true))
+                }
             }
             // services the firmware's programs call unchecked and nothing here registers
-            if (svc.name == "zygote" && engine == Engine.N64 && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
+            if (javaStubs && svc.name == "zygote" && engine == Engine.N64 && File(paths.root, "system/framework/aemu-stubs.jar").isFile) {
                 val names = Kernel64.forApi(img.api).standInServices.filter { (name, user) ->
                     runCatching { String(File(paths.root, user.substringBefore('#')).readBytes(), Charsets.ISO_8859_1).contains(user.substringAfter('#', name)) }.getOrDefault(false) }.keys
                 synchronized(procs) { procs.remove("aemu-standin") }?.let { runCatching { it.destroyForcibly() } }
                 if (names.isNotEmpty()) startService(GuestService("aemu-standin", listOf("/system/bin/app_process",
-                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.andropaw.stub.StandIn") + names, optional = true))
+                    "-Djava.class.path=/system/framework/aemu-stubs.jar", "/system/bin", "app.aemu.stub.StandIn") + names, optional = true))
             }
             startService(svc)
             svc.waitSocket?.let { sock -> waitFor("socket $sock", 20_000) { paths.socket(sock).exists() } }
@@ -848,6 +900,23 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     private fun alive(): List<String> = synchronized(procs) { procs.filterValues { it.isAlive }.keys.toList() }
 
+    /** Pids of the optional services currently alive, for the host child-process budget. */
+    private fun swappableServicePids(): Set<Int> = synchronized(procs) {
+        procs.filterKeys { it in swappableNames && it !in guardHotServices }
+            .mapNotNull { GuestProcesses.pid(it.value) }
+            .filter { it > 1 }.toSet()
+    }
+
+    /** A guard kill is ours, not the host's: remember the name before the watchdog sees its exit code. */
+    private fun markGuardSwap(pid: Int) {
+        val name = synchronized(procs) {
+            procs.entries.firstOrNull { GuestProcesses.pid(it.value) == pid }?.key
+        } ?: return
+        val now = System.currentTimeMillis()
+        guardSwaps.entries.removeIf { now - it.value > 30_000 }
+        guardSwaps[name] = now
+    }
+
     private fun waitFor(what: String, ms: Long, cond: () -> Boolean): Boolean {
         val until = SystemClock.uptimeMillis() + ms
         while (SystemClock.uptimeMillis() < until && !stopping) {
@@ -1006,7 +1075,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         val def = plan.firstOrNull { it.name == svc } ?: InitPlan.optional(svc, img, paths.root)
         if (def == null) { log("ctl.${if (start) "start" else "stop"} $svc: no such service"); return }
         synchronized(procs) { procs.remove(svc) }?.destroyForcibly()
-        if (start) Thread { runCatching { startService(def) } }.start()
+        if (start) {
+            // ctl.start is the swap-in half of the process budget: once the guest asks for a
+            // service we reclaimed, keep it hot so the guard does not ping-pong it in and out.
+            if (svc in swappableNames) guardHotServices.add(svc)
+            Thread { runCatching { startService(def) } }.start()
+        }
     }
 
     /** Guest AMS cached-app ceiling: half of our soft guard, clamped to a usable range. */
@@ -1236,8 +1310,12 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
                         logZygoteExit(name, code)
-                        // An outside SIGKILL gets one clean whole-machine restart, never a local rebuild.
-                        if (handleHostKill(code, "zygote/$name")) break@wd
+                        // First boot: one clean whole-machine restart. Runtime: ask the user, never rebuild.
+                        when (handleHostKill(code, "zygote/$name")) {
+                            HostKillOutcome.RESTART_HANDLED -> break@wd
+                            HostKillOutcome.ASK_USER -> continue@wd
+                            HostKillOutcome.NOT_OURS -> Unit
+                        }
                         // A secondary ABI failure must not tear down the primary framework.
                         if (name == "zygote_secondary") {
                             val attempts = restarts.getOrDefault(name, 0)
@@ -1286,20 +1364,16 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                             while (zygoteCrashes.isNotEmpty() && zygoteCrashes.first() < now - 600_000) zygoteCrashes.removeFirst()
                             val recentCrashesIn1Min = zygoteCrashes.count { it >= now - 60_000 }
                             if (recentCrashesIn1Min >= 5 || zygoteCrashes.size > 6) {
-                                // 到阈值先整机重启一次（冷启动往往能救回反复崩的系统），再崩才放弃
-                                if (!zygoteRebootTried && bootDoneAt > 0) {
-                                    zygoteRebootTried = true
-                                    if (app.andropaw.AppPrefs.allowHostKillRestart(ctx)) {
-                                        log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — clean whole-machine restart")
-                                        onPower?.invoke(true, "host kill restart")
-                                    } else {
-                                        failure = "system keeps crashing; automatic restart limit reached"
-                                        onPower?.invoke(false, "host kill give up")
-                                    }
-                                    break@wd
+                                // Runtime: the machine is already up. Do not silently restart it —
+                                // show the original "wait / cold reboot" choice and let the user decide.
+                                zygoteRebootTried = true
+                                val now2 = System.currentTimeMillis()
+                                log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — asking the user instead of restarting automatically")
+                                if (now2 - lastMassDeathNotice > 30_000) {
+                                    lastMassDeathNotice = now2
+                                    runCatching { onMassDeath?.invoke(3) }
                                 }
-                                failure = "system keeps crashing: $name exited $recentCrashesIn1Min times in 1 min (${zygoteCrashes.size} times in 10 min, last code $code)" + " | 最近: " + lines.takeLast(3).joinToString(" ; ")
-                                log("✖ $failure"); setState(State.FAILED)
+                                break@wd
                             } else {
                                 log("✖ $name crashed (code $code), restarting system ($zygoteRestarts)")
                                 restartZygote()
@@ -1315,6 +1389,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     // 集群死亡检测：成批 137（同秒全灭、逆启动顺序）= guest 发起了关机/重启，
                     // 逐个重启 surfaceflinger 毫无意义——整机冷启动一次才对路
                     if (code == 137) {
+                        // The process-budget guard may SIGKILL several optional services in one
+                        // round. Those are our own reclaims: do not count them as a host cull,
+                        // do not restart them, and do not trip the whole-machine restart.
+                        if (guardSwaps.remove(name)?.let { System.currentTimeMillis() - it < 10_000 } == true) {
+                            log("· $name: swapped out by the process budget (back on ctl.start)")
+                            continue@wd
+                        }
                         // 大量 137 → 一律软重启：杀光 guest 程序、清 socket、按 init 顺序重放、彻底刷新显示。
                         // 不退出模拟器页面、不走冷重启。
                         val nowMs = System.currentTimeMillis()
@@ -1325,13 +1406,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 之前只认 bootDoneAt，属性没收到时恢复逻辑就彻底失效、系统直接卡死
         (bootDoneAt > 0 || state == State.RUNNING || System.currentTimeMillis() - created > 90_000)) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
-                            if (handleHostKill(137, "mass SIGKILL sweep")) break@wd
-                            // switch off in settings: fall back to asking the user (snackbar only)
-                            val now2 = System.currentTimeMillis()
-                            if (now2 - lastMassDeathNotice > 30_000) {
-                                lastMassDeathNotice = now2
-                                log("✖ mass SIGKILL — not acting on it; asking the user (snackbar)")
-                                runCatching { onMassDeath?.invoke(3) }
+                            when (handleHostKill(137, "mass SIGKILL sweep")) {
+                                HostKillOutcome.RESTART_HANDLED -> break@wd
+                                HostKillOutcome.ASK_USER -> Unit   // the choice was already shown
+                                HostKillOutcome.NOT_OURS -> {
+                                    // switch off in settings: fall back to asking the user (snackbar only)
+                                    val now2 = System.currentTimeMillis()
+                                    if (now2 - lastMassDeathNotice > 30_000) {
+                                        lastMassDeathNotice = now2
+                                        log("✖ mass SIGKILL — not acting on it; asking the user (snackbar)")
+                                        runCatching { onMassDeath?.invoke(3) }
+                                    }
+                                }
                             }
                         }
                         continue@wd
@@ -1790,6 +1876,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         private const val FREEZE_STAGE_GAP_MS = 45_000L
         /** floor of oom_score_adj: a process pinned here is never selected by the host low-memory killer */
         private const val PROTECTED_OOM_ADJ = -1000
+        /** Only this first window counts as "the initial boot"; after it, outside kills are the user's call. */
+        private const val FIRST_BOOT_WINDOW_MS = 180_000L
     }
     /**
      * Ставит политику AOSP 4.3 за обёрткой: родная сохраняется, лишние потоки производителя
@@ -1839,35 +1927,50 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     @Volatile private var zygoteKillReason: String? = null
 
+    private enum class HostKillOutcome { NOT_OURS, ASK_USER, RESTART_HANDLED }
+
     /**
-     * The host killed part of the guest tree from the outside (Android 12+ Phantom Process Killer
-     * culls an app's forked children by uid; some HyperOS / ColorOS builds ignore the
-     * "disable child process restrictions" toggle entirely).
+     * An outside SIGKILL (Android 12+ Phantom Process Killer culls an app's forked children by
+     * uid; some HyperOS / ColorOS builds ignore the "disable child process restrictions" toggle).
      *
-     * A local rebuild only loops: restartZygote() -> cold reboot -> stop() wipes every debounce
-     * counter -> the new VmActivity sees STOPPED and boots again -> killed again. zygote_secondary
-     * also aborts (134) on every rebuild because it is started before the primary binds its sockets.
+     * **Only the very first boot may restart the machine on its own.** A local rebuild during boot
+     * loops forever (restartZygote -> cold reboot -> stop() wipes every debounce counter -> new
+     * VmActivity boots again -> killed again), and zygote_secondary aborts (134) on every rebuild.
+     * So during that window we do one clean WHOLE-MACHINE restart, capped and persisted.
      *
-     * Instead do one clean WHOLE-MACHINE restart: that goes through doBoot()'s full orchestration
-     * (service waits, delays, integrity checks), which is the only path the secondary zygote works
-     * on. The restart count is persisted and capped, so a host that keeps killing never loops.
+     * Once the guest has reached the home screen the decision belongs to the user: show the
+     * original "wait for self-recovery / cold reboot" choice and keep the watchdog alive. Never
+     * silently restart or rebuild zygote behind the user's back while they are using the machine.
      */
     @Volatile private var externalKillHandled = false
-    private fun handleHostKill(code: Int, where: String): Boolean {
-        if (stopping || externalKillHandled) return true
+    private fun handleHostKill(code: Int, where: String): HostKillOutcome {
+        if (stopping) return HostKillOutcome.RESTART_HANDLED
         // Intentional SIGKILLs (setup wizard, freeze watchdog, surfaceflinger restart) are ours.
-        if (code != 137 || plannedRestart || zygoteKillReason != null) return false
-        if (!app.andropaw.AppPrefs.hostKillAutoRestart(ctx)) return false
+        if (code != 137 || plannedRestart || zygoteKillReason != null) return HostKillOutcome.NOT_OURS
+        // A machine that never reported boot_completed must not be treated as "booting" forever.
+        val booting = bootDoneAt == 0L && state != State.RUNNING &&
+            System.currentTimeMillis() - created < FIRST_BOOT_WINDOW_MS
+        if (!booting) {
+            val now = System.currentTimeMillis()
+            if (now - lastMassDeathNotice > 30_000) {
+                lastMassDeathNotice = now
+                log("✖ $where: external SIGKILL after boot — asking the user (no automatic restart)")
+                runCatching { onMassDeath?.invoke(3) }
+            }
+            return HostKillOutcome.ASK_USER
+        }
+        if (externalKillHandled) return HostKillOutcome.RESTART_HANDLED
+        if (!app.andropaw.AppPrefs.hostKillAutoRestart(ctx)) return HostKillOutcome.NOT_OURS
         externalKillHandled = true
         val allowed = app.andropaw.AppPrefs.allowHostKillRestart(ctx)
-        val action = if (allowed) "clean whole-machine restart" else "restart limit reached, stopping"
+        val action = if (allowed) "clean whole-machine restart during first boot" else "restart limit reached, stopping"
         log("✖ $where: external SIGKILL (137), guestProcesses=${lmk?.processCount ?: 0}/${GuestLmk.PHANTOM_PROCESS_LIMIT} — $action")
         if (allowed) runCatching { onPower?.invoke(true, "host kill restart") }
         else {
             failure = "host keeps killing guest processes; automatic restart limit reached"
             runCatching { onPower?.invoke(false, "host kill give up") }
         }
-        return true
+        return HostKillOutcome.RESTART_HANDLED
     }
 
     private fun requestZygoteRestart(reason: String) {
@@ -2134,7 +2237,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
     val shellPrefix: String get() = "export PATH=/system/bin:/system/xbin:\$PATH; $toolWrappers"
 
     /**
-     * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.andropaw.stub.Run, which
+     * Shell functions that run the firmware's Java tools (am, pm, input, svc…) through app.aemu.stub.Run, which
      * calls System.exit() after main(): left alone, the tool's VM waits forever for its binder thread and the command
      * never returns. Jar and class come from each tool's own script in /system/bin.
      */
@@ -2147,7 +2250,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val text = runCatching { f.readText(Charsets.ISO_8859_1) }.getOrNull() ?: return@forEach
             val cls = Regex("app_process\\S*\\s+\\S+\\s+([A-Za-z_][\\w.$]*\\.[A-Z][\\w$]*)").find(text)?.groupValues?.get(1) ?: return@forEach
             val jar = Regex("framework/([\\w.-]+\\.jar)").find(text)?.groupValues?.get(1) ?: return@forEach
-            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.andropaw.stub.Run $cls \"\$@\"; }; ")
+            sb.append("${f.name}() { CLASSPATH=/system/framework/$jar:$stubs app_process /system/bin app.aemu.stub.Run $cls \"\$@\"; }; ")
         }
         sb.toString()
     }

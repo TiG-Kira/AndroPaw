@@ -54,6 +54,18 @@ class GuestLmk(
     /** pids parked with SIGSTOP until the guest brings them forward or the budget needs them out */
     private val frozen = ConcurrentHashMap<Int, Long>()
 
+    /**
+     * Pids of *optional* fixed guest services (the boot plan marks them optional; framework roots
+     * and HALs are never included). The old guard only reclaimed zygote-forked cached apps, so on
+     * an N64 boot where ~40 native services are alive before the first app exists, its candidate
+     * list was empty and all three budget presets were no-ops. Optional services are the second
+     * tier: killing them lowers the host cgroup count for real, and the guest already has a
+     * ctl.start path that brings one back when something asks for it.
+     */
+    @Volatile var swappablePids: () -> Set<Int> = { emptySet() }
+    /** Notifies GuestVm that we killed one of its optional services, so the watchdog does not mistake the batch of 137s for a host cull. */
+    @Volatile var onSwappedOut: (Int) -> Unit = {}
+
     fun start() {
         running = true
         runCatching {
@@ -249,7 +261,11 @@ class GuestLmk(
             val raw = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull()
                 ?: return@forEach
             val argv0 = raw.substringBefore(0.toChar()).trim()
-            val native = raw.contains(rootPath) || raw.contains("libaemu64") || raw.contains("libqemu")
+            // binderd/hwbinderd/vndbinderd are spawned directly with their socket under run/,
+            // so they carry neither the image root nor AEMU64_ROOT. They still count against the
+            // host ceiling, and were previously invisible to the budget.
+            val native = raw.contains(rootPath) || raw.contains("libaemu64") || raw.contains("libqemu") ||
+                raw.contains("libbinderd")
             val ours = if (native) true else {
                 GuestProcesses.appCandidate(argv0) && runCatching {
                     String(File(d, "environ").readBytes(), Charsets.ISO_8859_1)
@@ -282,8 +298,10 @@ class GuestLmk(
     private fun guardPhantomProcesses(): Boolean {
         val now = System.currentTimeMillis()
         if (now - lastPhantomKillAt < PHANTOM_GUARD_GAP_MS) return false
-        val (total, candidates) = scanGuestProcesses()
+        val (total, appCandidates) = scanGuestProcesses()
         processCount = total
+        val services = runCatching { swappablePids() }.getOrDefault(emptySet())
+            .filter { it > 1 && File("/proc/$it").exists() }
         // pids that disappeared on their own are no longer ours to wake
         frozen.keys.removeAll { !File("/proc/$it").exists() }
         // expire parked pids: a free slot means swap in, still over budget means swap out
@@ -299,25 +317,33 @@ class GuestLmk(
             return resumed > 0
         }
         // least important first: highest adj, then the newest fork
-        val ordered = candidates.filter { !frozen.containsKey(it) }
+        val apps = appCandidates.filter { !frozen.containsKey(it) }
             .sortedWith(compareByDescending<Int> { adj[it] ?: CACHED }.thenByDescending { it })
         if (total > safeLimit) {
-            // a parked app is already proven idle — swap it out before plain cached apps
+            // Apps are cheapest to lose (zygote re-forks them on demand); optional services are
+            // the last resort. Swap enough in one round to actually get back under the line —
+            // a boot with ~40 services needs far more than the old batch of three.
             val parked = frozen.keys.sortedByDescending { adj[it] ?: CACHED }
-            for (pid in (parked + ordered).take(SWAP_OUT_BATCH)) {
+            val queue = (parked + apps + services).distinct()
+            val need = (total - warnLimit).coerceIn(1, SWAP_OUT_BATCH_MAX)
+            var swappedServices = 0
+            for (pid in queue.take(need)) {
+                val wasService = pid in services
                 if (thaw(pid, swapOut = true)) swapped++
                 else if (runCatching { Os.kill(pid, OsConstants.SIGKILL) }.isSuccess) {
                     adj.remove(pid); swapped++; kills++
+                    if (wasService) { swappedServices++; runCatching { onSwappedOut(pid) } }
                 }
             }
+            if (swappedServices > 0) log("phantom guard: swapped out $swappedServices optional guest service(s) — they come back via ctl.start when needed")
         } else {
             var parked = 0
-            for (pid in ordered.take(FREEZE_BATCH)) if (freeze(pid)) parked++
+            for (pid in apps.take(FREEZE_BATCH)) if (freeze(pid)) parked++
             if (parked > 0) log("phantom guard: $total processes (host ceiling $PHANTOM_PROCESS_LIMIT) — parked $parked cached app(s)")
             return parked > 0
         }
         lastPhantomKillAt = now
-        if (swapped > 0) log("phantom guard: $total processes (host ceiling $PHANTOM_PROCESS_LIMIT) — swapped out $swapped cached app(s); zygote kept")
+        if (swapped > 0) log("phantom guard: $total processes (host ceiling $PHANTOM_PROCESS_LIMIT) — swapped out $swapped process(es); zygote kept")
         return swapped > 0
     }
 
@@ -327,7 +353,7 @@ class GuestLmk(
         val minHost = if (lowRam) 2500L else MIN_HOST_MB
         val maxCached = if (ramMb > 0) (ramMb / 128).coerceIn(2, MAX_CACHED) else if (lowRam) 4 else MAX_CACHED
         while (running) {
-            Thread.sleep(if (processCount > warnLimit) 500L else 2000L)
+            Thread.sleep(if (processCount > safeLimit) 250L else if (processCount > warnLimit) 500L else 2000L)
             if (!running) continue
             adj.keys.removeAll { !File("/proc/$it").exists() }
             // Child-process ceiling is a host policy, not a memory condition: guard it during
@@ -382,6 +408,7 @@ class GuestLmk(
         /** A parked app is swapped back in or out after this long, never left stopped forever. */
         const val FREEZE_MAX_MS = 8_000L
         const val FREEZE_BATCH = 2
-        const val SWAP_OUT_BATCH = 3
+        /** A boot can be ~40 processes over budget; three per round never catches up before the host culls. */
+        const val SWAP_OUT_BATCH_MAX = 8
     }
 }
