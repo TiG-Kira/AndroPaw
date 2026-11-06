@@ -204,7 +204,6 @@
     <string name="nav_search">Cerca</string>
     <string name="nav_dpad">Trackball</string>
     <string name="m_minimize">Riduci</string>
-    <string name="m_reset_menu_pos">Ripristina il pulsante del menu</string>
     <string name="m_record">Registra lo schermo</string>
     <string name="m_record_stop">Interrompi registrazione</string>
     <string name="m_vnc">Avvia server VNC</string>

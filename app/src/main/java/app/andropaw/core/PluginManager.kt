@@ -2,8 +2,11 @@ package app.andropaw.core
 
 import android.content.Context
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.InputStream
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 /** Which framework a machine's generation uses to load plug-ins. */
 enum class PluginBackend(val key: String, val label: String, val note: String) {
@@ -155,27 +158,22 @@ object PluginManager {
         target.mkdirs()
 
         var apkName: String? = null
-        // An apk picked on its own is not unpacked: it *is* the plug-in's payload (an Xposed
-        // module, or a module that only ships an app), so it is stored as module.apk below.
-        if (!src.name.endsWith(".apk", true)) {
-            ZipFile(src).use { zip ->
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val e = entries.nextElement()
-                    if (e.isDirectory) continue
-                    val name = e.name.replace('\\', '/')
-                    if (name.startsWith("META-INF/")) continue
-                    if (name.contains("..") || name.startsWith("/")) continue
+        // A standalone apk is identified by its *content*, not by the cache file's suffix:
+        // content:// uris often have no usable extension (msf:1234), so the old name check
+        // unpacked apks as if they were module zips and the plug-in ended up with no payload.
+        if (!meta.standaloneApk) {
+            forEachEntry(src) { name, open ->
+                if (!name.startsWith("META-INF/") && !name.contains("..") && !name.startsWith("/")) {
                     val out = File(target, name)
                     out.parentFile?.mkdirs()
-                    zip.getInputStream(e).use { input -> out.outputStream().use { input.copyTo(it) } }
+                    open().use { input -> out.outputStream().use { input.copyTo(it) } }
                     if (name.endsWith(".apk") && (name == "module.apk" || !name.contains('/'))) apkName = name
                 }
             }
         }
 
         // an apk picked on its own is the plug-in: keep it as the module's own apk
-        if (src.name.endsWith(".apk", true) && apkName == null) {
+        if (meta.standaloneApk && apkName == null) {
             src.copyTo(File(target, "module.apk"), overwrite = true)
             apkName = "module.apk"
         }
@@ -224,7 +222,62 @@ object PluginManager {
         val author: String,
         val description: String,
         val entry: String?,
+        /** The picked file is an apk itself, not a module zip. */
+        val standaloneApk: Boolean,
     )
+
+    /**
+     * Walks the entries of a module zip / apk, tolerating archives whose central directory
+     * Android's ZipFile refuses with "invalid CEN header (bad compression method: N)".
+     * LSPosed / KernelSU module zips and repacked apks hit that check even though their local
+     * entries are readable; ZipInputStream walks local file headers only and never sees the CEN.
+     *
+     * [open] must be consumed synchronously inside [block]: the streaming fallback has already
+     * buffered that entry when the callback runs.
+     */
+    private fun forEachEntry(src: File, block: (name: String, open: () -> InputStream) -> Unit) {
+        val failures = ArrayList<String>()
+        var handled = false
+        try {
+            ZipFile(src).use { zip ->
+                val entries = zip.entries()
+                handled = true
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    if (e.isDirectory) continue
+                    block(e.name.replace('\\', '/')) { zip.getInputStream(e) }
+                }
+            }
+            return
+        } catch (e: Exception) {
+            // a failure inside block() is a real install error: do not replay the whole archive
+            if (handled) throw e
+            failures += e.message.orEmpty()
+        }
+        var streaming = false
+        try {
+            ZipInputStream(src.inputStream().buffered()).use { zis ->
+                while (true) {
+                    val e = zis.nextEntry ?: break
+                    if (!e.isDirectory) {
+                        val data = zis.readBytes()
+                        streaming = true
+                        block(e.name.replace('\\', '/')) { ByteArrayInputStream(data) }
+                    }
+                    zis.closeEntry()
+                }
+            }
+            return
+        } catch (fallback: Exception) {
+            if (streaming) throw fallback
+            failures += fallback.message.orEmpty()
+            throw IllegalArgumentException(
+                "不是有效的模块 zip / apk（${src.length()} 字节）：" +
+                    "${failures.filter { it.isNotBlank() }.joinToString(" / ")}。请重新下载完整的插件包。",
+                fallback,
+            )
+        }
+    }
 
     /**
      * What a module zip or an apk says about itself.
@@ -236,28 +289,31 @@ object PluginManager {
         var props: String? = null
         var entry: String? = null
         var inner: File? = null
-        ZipFile(src).use { zip ->
-            zip.getEntry("module.prop")?.let { e ->
-                props = zip.getInputStream(e).use { it.readBytes().toString(Charsets.UTF_8) }
-            }
-            zip.getEntry("assets/xposed_init")?.let { e ->
-                entry = zip.getInputStream(e).use { it.readBytes().toString(Charsets.UTF_8) }
+        var hasManifest = false
+        forEachEntry(src) { name, open ->
+            when (name) {
+                "module.prop" -> props = open().use { it.readBytes().toString(Charsets.UTF_8) }
+                "assets/xposed_init" -> entry = open().use { it.readBytes().toString(Charsets.UTF_8) }
                     .lineSequence().map { l -> l.trim() }.firstOrNull { l -> l.isNotEmpty() }
-            }
-            zip.getEntry("module.apk")?.let { e ->
-                val tmp = File.createTempFile("apw-probe", ".apk")
-                zip.getInputStream(e).use { i -> tmp.outputStream().use { i.copyTo(it) } }
-                inner = tmp
-                ZipFile(tmp).use { z ->
-                    z.getEntry("assets/xposed_init")?.let { x ->
-                        entry = z.getInputStream(x).use { it.readBytes().toString(Charsets.UTF_8) }
-                            .lineSequence().map { l -> l.trim() }.firstOrNull { l -> l.isNotEmpty() }
+                "AndroidManifest.xml" -> hasManifest = true
+                "module.apk" -> {
+                    val tmp = File.createTempFile("apw-probe", ".apk")
+                    open().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
+                    inner = tmp
+                    // the embedded apk may have been packed the same way as the outer zip
+                    runCatching {
+                        forEachEntry(tmp) { n, o ->
+                            if (n == "assets/xposed_init") entry = o().use { it.readBytes().toString(Charsets.UTF_8) }
+                                .lineSequence().map { l -> l.trim() }.firstOrNull { l -> l.isNotEmpty() }
+                        }
                     }
                 }
             }
         }
         val map = parseProps(props)
-        val apk = inner ?: src.takeIf { it.name.endsWith(".apk", true) }
+        // A module zip declares itself with module.prop; a bare apk is the payload itself.
+        val standaloneApk = props == null && hasManifest
+        val apk = inner ?: src.takeIf { standaloneApk }
         val pkg = apk?.let { packageOf(ctx, it) }
         runCatching { inner?.delete() }
 
@@ -269,6 +325,7 @@ object PluginManager {
             author = map["author"].orEmpty(),
             description = map["description"].orEmpty(),
             entry = entry,
+            standaloneApk = standaloneApk,
         )
     }
 

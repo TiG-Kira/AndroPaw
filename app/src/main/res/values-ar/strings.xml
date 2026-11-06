@@ -204,7 +204,6 @@
     <string name="nav_search">بحث</string>
     <string name="nav_dpad">كرة التتبع</string>
     <string name="m_minimize">تصغير</string>
-    <string name="m_reset_menu_pos">إعادة ضبط زر القائمة</string>
     <string name="m_record">تسجيل الشاشة</string>
     <string name="m_record_stop">إيقاف التسجيل</string>
     <string name="m_vnc">تشغيل خادم VNC</string>

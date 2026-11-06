@@ -204,7 +204,6 @@
     <string name="nav_search">جستجو</string>
     <string name="nav_dpad">گوی ردیاب</string>
     <string name="m_minimize">کوچک کردن</string>
-    <string name="m_reset_menu_pos">بازنشانی دکمهٔ منو</string>
     <string name="m_record">ضبط صفحه</string>
     <string name="m_record_stop">توقف ضبط</string>
     <string name="m_vnc">راه‌اندازی سرور VNC</string>

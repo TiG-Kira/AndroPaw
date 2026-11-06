@@ -19,8 +19,26 @@ import java.util.concurrent.ConcurrentHashMap
  *  - 4.4+ — пакетами в сокет /dev/socket/lmkd (int big-endian: 1 = PROCPRIO pid uid adj, 2 = PROCREMOVE pid).
  * Когда памяти мало, убиваем самый неважный и самый толстый процесс, как это делал бы lowmemorykiller.
  */
-/** [ramMb] > 0: guest RAM budget; background apps are killed when the guest's total RSS exceeds it. */
-class GuestLmk(private val root: File, private val lowRam: Boolean, private val log: (String) -> Unit, private val ramMb: Int = 0) {
+/**
+ * [ramMb] > 0: guest RAM budget; background apps are killed when the guest's total RSS exceeds it.
+ *
+ * Besides memory, the host puts a hard ceiling on how many child processes an app may fork:
+ * Android 12+'s "Phantom Process Killer" SIGKILLs the tree once the count passes 32, whatever
+ * the free RAM is. A 5.0+ (N64) guest runs one host process per service and one per app, so on
+ * a 12 GB phone with 5 GB free it can hit that ceiling during boot while the memory-based
+ * reaper below never fires (it only looks at MemAvailable). [guardPhantomProcesses] is
+ * therefore deliberately independent of [armed]: it runs during boot too, and only ever
+ * reclaims ordinary cached apps, never a core service.
+ */
+class GuestLmk(
+    private val root: File,
+    private val lowRam: Boolean,
+    private val log: (String) -> Unit,
+    private val ramMb: Int = 0,
+    /** AEmulator Pro: budget preset chosen on the settings page, applied when the machine boots. */
+    private val warnLimit: Int = PHANTOM_WARN_LIMIT,
+    private val safeLimit: Int = PHANTOM_SAFE_LIMIT,
+) {
     private val adj = ConcurrentHashMap<Int, Int>()
     @Volatile private var running = false
     @Volatile var armed = false
@@ -28,8 +46,13 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
     private var bound: LocalSocket? = null
     private val fifo = File(root, "dev/aemu_oom")
     @Volatile var kills = 0
-    /** boot 完成后才允许杀进程（由 GuestVm 置位） */
         private set
+    /** Guest processes seen by the last scan — read by the zygote-exit diagnostics. */
+    @Volatile var processCount = 0
+        private set
+    private var lastPhantomKillAt = 0L
+    /** pids parked with SIGSTOP until the guest brings them forward or the budget needs them out */
+    private val frozen = ConcurrentHashMap<Int, Long>()
 
     fun start() {
         running = true
@@ -48,6 +71,9 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         runCatching { server?.close() }; runCatching { bound?.close() }
         // разбудить читателя FIFO
         runCatching { File(fifo.absolutePath).appendText("\n") }
+        // never leave a stopped process behind when the VM goes away
+        frozen.keys.forEach { runCatching { Os.kill(it, OsConstants.SIGCONT) } }
+        frozen.clear()
         adj.clear()
     }
 
@@ -74,7 +100,7 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         if (p.size < 3) return
         val pid = p[0].toIntOrNull() ?: return
         val v = p[2].toIntOrNull() ?: return
-        adj[pid] = if (p[1] == "s") scoreToAdj(v) else v
+        noteAdj(pid, if (p[1] == "s") scoreToAdj(v) else v)
     }
 
     /**
@@ -89,6 +115,45 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
     }
 
     private fun scoreToAdj(score: Int) = if (score >= 1000) 15 else score * 17 / 1000
+
+    /** The framework roots are counted, but never frozen or swapped out: losing zygote means a boot loop. */
+    private val FRAMEWORK_ROOTS = setOf(
+        "zygote", "zygote64", "zygote_secondary", "system_server", "surfaceflinger",
+        "servicemanager", "hwservicemanager", "vndservicemanager", "init",
+        "app_process", "app_process32", "app_process64",
+    )
+
+    /**
+     * The guest's ActivityManager reports a new importance on every state change. A parked pid
+     * whose adj just dropped is being brought back to the foreground — swap it in immediately,
+     * before anything tries to talk to a stopped process.
+     */
+    private fun noteAdj(pid: Int, value: Int) {
+        adj[pid] = value
+        if (value < CACHED && frozen.containsKey(pid)) {
+            runCatching { Os.kill(pid, OsConstants.SIGCONT) }
+            frozen.remove(pid)
+            log("phantom guard: swapped pid $pid back in (adj $value)")
+        }
+    }
+
+    private fun freeze(pid: Int): Boolean {
+        if (frozen.containsKey(pid)) return false
+        if (!runCatching { Os.kill(pid, OsConstants.SIGSTOP) }.isSuccess) return false
+        frozen[pid] = System.currentTimeMillis()
+        return true
+    }
+
+    /** Wake a parked pid; [swapOut] ends it instead — only that actually lowers the host's count. */
+    private fun thaw(pid: Int, swapOut: Boolean = false): Boolean {
+        if (frozen.remove(pid) == null) return false
+        runCatching { Os.kill(pid, OsConstants.SIGCONT) }
+        if (!swapOut) return true
+        if (!runCatching { Os.kill(pid, OsConstants.SIGKILL) }.isSuccess) return false
+        adj.remove(pid)
+        kills++
+        return true
+    }
 
     private fun serveLmkd() {
         val sock = File(root, "dev/socket/lmkd")
@@ -117,7 +182,7 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
                 val bb = java.nio.ByteBuffer.wrap(buf, 0, n)
                 if (n < 8) continue
                 when (bb.int) {
-                    1 -> if (n >= 16) { val pid = bb.int; bb.int; adj[pid] = lmkdAdj(bb.int) }
+                    1 -> if (n >= 16) { val pid = bb.int; bb.int; noteAdj(pid, lmkdAdj(bb.int)) }
                     2 -> adj.remove(bb.int)
                 }
             }
@@ -167,15 +232,108 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         File("/proc/$pid/statm").readText().split(' ')[1].toLong() * 4 / 1024
     }.getOrDefault(-1)
 
+    /**
+     * How many processes of this image the host can see, plus the pids of ordinary cached apps
+     * that may be reclaimed. Native services carry the image root in argv; zygote children
+     * rewrite their cmdline to a package name, so those are recognised by AEMU64_ROOT instead.
+     * The env marker keeps the host's own apps out of the count.
+     */
+    private fun scanGuestProcesses(): Pair<Int, List<Int>> {
+        val rootPath = root.absolutePath
+        val marker = "AEMU64_ROOT=$rootPath"
+        val canonical = runCatching { "AEMU64_ROOT=${root.canonicalPath}" }.getOrDefault(marker)
+        var total = 0
+        val sacrificial = ArrayList<Int>()
+        File("/proc").listFiles()?.forEach { d ->
+            val pid = d.name.toIntOrNull() ?: return@forEach
+            val raw = runCatching { String(File(d, "cmdline").readBytes(), Charsets.ISO_8859_1) }.getOrNull()
+                ?: return@forEach
+            val argv0 = raw.substringBefore(0.toChar()).trim()
+            val native = raw.contains(rootPath) || raw.contains("libaemu64") || raw.contains("libqemu")
+            val ours = if (native) true else {
+                GuestProcesses.appCandidate(argv0) && runCatching {
+                    String(File(d, "environ").readBytes(), Charsets.ISO_8859_1)
+                        .split(0.toChar()).any { it == marker || it == canonical }
+                }.getOrDefault(false)
+            }
+            if (!ours) return@forEach
+            total++
+            // Never a candidate, even if a recycled pid makes its cmdline look odd.
+            if (argv0 in FRAMEWORK_ROOTS) return@forEach
+            if (!native && isSacrificial(pid)) sacrificial += pid
+        }
+        return total to sacrificial
+    }
+
+    /**
+     * Two-stage child-process budget, independent of [armed] because a boot that forks past 32
+     * processes is killed in one batch whatever the free RAM is.
+     *
+     *  - soft stage (WARN): park the least useful cached apps with SIGSTOP. A stopped process
+     *    still counts in the uid cgroup, but it stops burning background CPU — the host kills
+     *    phantom processes for excessive CPU too.
+     *  - hard stage (SAFE): swap them out for real. The guest framework keeps saved state, so a
+     *    killed cached app is re-forked by the still-alive zygote when the user returns to it —
+     *    exactly the foreground/background behaviour of a real device.
+     *
+     * Framework roots are never candidates: the whole point is that trimming background apps
+     * must never take zygote down with it.
+     */
+    private fun guardPhantomProcesses(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastPhantomKillAt < PHANTOM_GUARD_GAP_MS) return false
+        val (total, candidates) = scanGuestProcesses()
+        processCount = total
+        // pids that disappeared on their own are no longer ours to wake
+        frozen.keys.removeAll { !File("/proc/$it").exists() }
+        // expire parked pids: a free slot means swap in, still over budget means swap out
+        var resumed = 0
+        var swapped = 0
+        for ((pid, at) in frozen.toList()) {
+            if (now - at < FREEZE_MAX_MS) continue
+            if (total <= warnLimit) { if (thaw(pid)) resumed++ }
+            else if (thaw(pid, swapOut = true)) swapped++
+        }
+        if (total <= warnLimit) {
+            if (resumed > 0) log("phantom guard: $total processes — swapped $resumed app(s) back in")
+            return resumed > 0
+        }
+        // least important first: highest adj, then the newest fork
+        val ordered = candidates.filter { !frozen.containsKey(it) }
+            .sortedWith(compareByDescending<Int> { adj[it] ?: CACHED }.thenByDescending { it })
+        if (total > safeLimit) {
+            // a parked app is already proven idle — swap it out before plain cached apps
+            val parked = frozen.keys.sortedByDescending { adj[it] ?: CACHED }
+            for (pid in (parked + ordered).take(SWAP_OUT_BATCH)) {
+                if (thaw(pid, swapOut = true)) swapped++
+                else if (runCatching { Os.kill(pid, OsConstants.SIGKILL) }.isSuccess) {
+                    adj.remove(pid); swapped++; kills++
+                }
+            }
+        } else {
+            var parked = 0
+            for (pid in ordered.take(FREEZE_BATCH)) if (freeze(pid)) parked++
+            if (parked > 0) log("phantom guard: $total processes (host ceiling $PHANTOM_PROCESS_LIMIT) — parked $parked cached app(s)")
+            return parked > 0
+        }
+        lastPhantomKillAt = now
+        if (swapped > 0) log("phantom guard: $total processes (host ceiling $PHANTOM_PROCESS_LIMIT) — swapped out $swapped cached app(s); zygote kept")
+        return swapped > 0
+    }
+
     private fun loop() {
         // RSS процессов гостя не складываем: страницы зиготы общие и считались бы в каждом процессе.
         // Мерило — свободная память телефона; с lowRam держим запас больше и фона меньше.
         val minHost = if (lowRam) 2500L else MIN_HOST_MB
         val maxCached = if (ramMb > 0) (ramMb / 128).coerceIn(2, MAX_CACHED) else if (lowRam) 4 else MAX_CACHED
         while (running) {
-            Thread.sleep(2000)
-            if (!running || !armed) continue
+            Thread.sleep(if (processCount > warnLimit) 500L else 2000L)
+            if (!running) continue
             adj.keys.removeAll { !File("/proc/$it").exists() }
+            // Child-process ceiling is a host policy, not a memory condition: guard it during
+            // boot as well, when the framework forks most of its processes.
+            if (guardPhantomProcesses()) continue
+            if (!armed) continue
             val cached = adj.filter { it.value >= CACHED }.keys.toMutableSet()
             if (cached.isEmpty()) continue
             val avail = memAvailableMb()
@@ -214,5 +372,16 @@ class GuestLmk(private val root: File, private val lowRam: Boolean, private val 
         const val CACHED = 9
         const val MAX_CACHED = 10
         const val MIN_HOST_MB = 1500L
+        /** Android 12+ ActivityManagerConstants.MAX_PHANTOM_PROCESSES (shared by all apps). */
+        const val PHANTOM_PROCESS_LIMIT = 32
+        /** Soft stage: start parking idle apps here. */
+        const val PHANTOM_WARN_LIMIT = 20
+        /** Hard stage: swap apps out for real, leaving room for other apps' children. */
+        const val PHANTOM_SAFE_LIMIT = 24
+        const val PHANTOM_GUARD_GAP_MS = 600L
+        /** A parked app is swapped back in or out after this long, never left stopped forever. */
+        const val FREEZE_MAX_MS = 8_000L
+        const val FREEZE_BATCH = 2
+        const val SWAP_OUT_BATCH = 3
     }
 }

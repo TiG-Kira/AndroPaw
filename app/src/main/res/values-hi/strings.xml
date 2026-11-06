@@ -204,7 +204,6 @@
     <string name="nav_search">खोजें</string>
     <string name="nav_dpad">ट्रैकबॉल</string>
     <string name="m_minimize">छोटा करें</string>
-    <string name="m_reset_menu_pos">मेनू बटन रीसेट करें</string>
     <string name="m_record">स्क्रीन रिकॉर्ड करें</string>
     <string name="m_record_stop">रिकॉर्डिंग रोकें</string>
     <string name="m_vnc">VNC सर्वर शुरू करें</string>

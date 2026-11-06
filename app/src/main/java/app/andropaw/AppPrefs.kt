@@ -62,6 +62,10 @@ object AppPrefs {
     fun lastUpdateCheck(ctx: Context): Long = sp(ctx).getLong("last_update_check", 0L)
     fun setLastUpdateCheck(ctx: Context, v: Long) = sp(ctx).edit().putLong("last_update_check", v).apply()
 
+    /** AEmulator Pro: child-process budget preset, stored as a ProFeatures.GuardLevel key. */
+    fun proGuardLevel(ctx: Context): String = sp(ctx).getString("pro_guard_level", "standard") ?: "standard"
+    fun setProGuardLevel(ctx: Context, key: String) = sp(ctx).edit().putString("pro_guard_level", key).apply()
+
     /** Умолчания, которые получает только что импортированная система. */
     fun defaults(ctx: Context): VmSettings {
         val p = sp(ctx)

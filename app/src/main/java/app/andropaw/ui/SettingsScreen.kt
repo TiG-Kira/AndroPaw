@@ -1,5 +1,6 @@
 package app.andropaw.ui
 
+import android.content.Intent
 import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -35,6 +37,8 @@ import androidx.compose.ui.unit.sp
 import app.andropaw.AppPrefs
 import app.andropaw.BuildConfig
 import app.andropaw.R
+import app.andropaw.core.HostInfo
+import app.andropaw.core.ProFeatures
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import androidx.compose.material.icons.rounded.ChevronRight
 import top.yukonga.miuix.kmp.basic.Card
@@ -62,6 +66,8 @@ fun SettingsContent(
     val ctx = LocalContext.current
     var langDialog by remember { mutableStateOf(false) }
     var agentSettings by remember { mutableStateOf(false) }
+    var phantomGuide by remember { mutableStateOf(false) }
+    var proFeaturesDialog by remember { mutableStateOf(false) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
     var dynamic by remember { mutableStateOf(AppPrefs.dynamicColor(ctx)) }
@@ -77,6 +83,74 @@ fun SettingsContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item { AboutCard(onClick = onAbout) }
+
+        item {
+            val pm = ctx.getSystemService(android.os.PowerManager::class.java)
+            val batteryOk = pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
+            val phantom = HostInfo.phantomState(ctx)
+            val stateText = when (phantom) {
+                HostInfo.PhantomState.NOT_APPLICABLE -> stringResource(R.string.host_phantom_na)
+                HostInfo.PhantomState.DISABLED -> stringResource(R.string.host_phantom_off)
+                HostInfo.PhantomState.ACTIVE -> stringResource(R.string.host_phantom_on)
+                HostInfo.PhantomState.UNKNOWN -> stringResource(R.string.host_phantom_unknown)
+            }
+            Section(stringResource(R.string.host_compat_title), stringResource(R.string.host_compat_sub)) {
+                ArrowPreference(
+                    title = stringResource(R.string.host_phantom_title),
+                    summary = stateText,
+                    startAction = { Icon(Icons.Rounded.Tune, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { phantomGuide = true },
+                )
+                ArrowPreference(
+                    title = stringResource(R.string.host_battery_title),
+                    summary = stringResource(if (batteryOk) R.string.host_battery_off else R.string.host_battery_on),
+                    startAction = { Icon(Icons.Rounded.AutoAwesome, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = {
+                        runCatching {
+                            ctx.startActivity(Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:${ctx.packageName}")))
+                        }
+                    },
+                )
+            }
+        }
+
+        item {
+            var level by remember { mutableStateOf(ProFeatures.GuardLevel.of(AppPrefs.proGuardLevel(ctx))) }
+            Section(stringResource(R.string.pro_title), stringResource(R.string.pro_sub)) {
+                Text(stringResource(R.string.pro_guard_label), fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp))
+                val levels = ProFeatures.GuardLevel.entries
+                val labels = listOf(R.string.pro_guard_conservative, R.string.pro_guard_standard, R.string.pro_guard_aggressive)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(ConnectedButtonSpace)) {
+                    levels.forEachIndexed { i, l ->
+                        ConnectedToggleButton(
+                            checked = level == l,
+                            onCheckedChange = { level = l; AppPrefs.setProGuardLevel(ctx, l.key) },
+                            shape = connectedButtonShapes(i, levels.lastIndex),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                        ) { checked ->
+                            Text(stringResource(labels[i]), maxLines = 1, softWrap = false,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 13.sp,
+                                color = if (checked) MiuixTheme.colorScheme.onPrimaryContainer else MiuixTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+                Text(stringResource(R.string.pro_guard_hint), fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                ArrowPreference(
+                    title = stringResource(R.string.pro_features_row),
+                    summary = stringResource(R.string.pro_features_row_sub, ProFeatures.ALL.size),
+                    startAction = { Icon(Icons.Rounded.Tune, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { proFeaturesDialog = true },
+                )
+            }
+        }
 
         item {
             Section(stringResource(R.string.agent_settings_group)) {
@@ -165,6 +239,43 @@ fun SettingsContent(
 
     if (agentSettings) {
         app.andropaw.agent.AgentSettingsDialog(onDismiss = { agentSettings = false })
+    }
+
+    if (phantomGuide) {
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.host_phantom_guide_title),
+            onDismissRequest = { phantomGuide = false },
+        ) {
+            Text(HostInfo.phantomGuide(), fontSize = 13.sp, lineHeight = 19.sp)
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.done), onClick = { phantomGuide = false }),
+            ))
+        }
+    }
+
+    if (proFeaturesDialog) {
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.pro_features_title),
+            onDismissRequest = { proFeaturesDialog = false },
+        ) {
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                items(ProFeatures.ALL) { f ->
+                    val state = stringResource(when (f.state) {
+                        ProFeatures.State.BUILT_IN -> R.string.pro_state_built_in
+                        ProFeatures.State.PLANNED -> R.string.pro_state_planned
+                    })
+                    BasicComponent(
+                        title = "${stringResource(f.titleRes)} · $state",
+                        summary = stringResource(f.summaryRes),
+                    )
+                }
+            }
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.done), onClick = { proFeaturesDialog = false }),
+            ))
+        }
     }
 }
 

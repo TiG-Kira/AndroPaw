@@ -204,7 +204,6 @@
     <string name="nav_search">検索</string>
     <string name="nav_dpad">トラックボール</string>
     <string name="m_minimize">最小化</string>
-    <string name="m_reset_menu_pos">メニューボタンの位置をリセット</string>
     <string name="m_record">画面を録画</string>
     <string name="m_record_stop">録画を停止</string>
     <string name="m_vnc">VNC サーバーを開始</string>

@@ -202,7 +202,6 @@
     <string name="nav_search">Поиск</string>
     <string name="nav_dpad">Трекбол</string>
     <string name="m_minimize">Свернуть</string>
-    <string name="m_reset_menu_pos">Сбросить положение кнопки</string>
     <string name="m_record">Запись экрана</string>
     <string name="m_record_stop">Остановить запись</string>
     <string name="m_vnc">Запустить VNC-сервер</string>

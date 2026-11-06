@@ -321,7 +321,6 @@ class VmActivity : ComponentActivity() {
             gvm.lights.onChange { l -> runOnUiThread { led = l } }
         }
         guest?.start()
-        loadMenuOffset()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { session.input.press(InputService.KEY_BACK) }
@@ -487,12 +486,6 @@ class VmActivity : ComponentActivity() {
     }
 
     private enum class Dlg { NONE, SMS, CALL, BATTERY, ADB, DEVICE }
-
-    // position of the floating menu button, kept across launches
-    private val uiPrefs by lazy { getSharedPreferences("vm_ui", MODE_PRIVATE) }
-    private var menuOffset by mutableStateOf(Offset.Zero)
-    private fun loadMenuOffset() { menuOffset = Offset(uiPrefs.getFloat("menu_x", 0f), uiPrefs.getFloat("menu_y", 0f)) }
-    private fun saveMenuOffset() { uiPrefs.edit().putFloat("menu_x", menuOffset.x).putFloat("menu_y", menuOffset.y).apply() }
 
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm?.mic?.permissionGranted() }
 
@@ -820,6 +813,9 @@ class VmActivity : ComponentActivity() {
     private fun restartProcess(id: String, recovery: Boolean = false) {
         val i = Intent(this, VmActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).apply {
             putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
+            // a hand-off reboot continues an already unlocked machine: do not ask for the
+            // password again every time the user reboots it
+            putExtra(EXTRA_UNLOCKED, true)
         }
         val pi = android.app.PendingIntent.getActivity(this, 1, i, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_CANCEL_CURRENT)
         (getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 400, pi)
@@ -883,13 +879,6 @@ class VmActivity : ComponentActivity() {
         androidx.compose.foundation.layout.BoxWithConstraints(
             Modifier.fillMaxSize().onGloballyPositioned { menuPageOrigin = it.boundsInRoot().topLeft }
         ) {
-            // the menu button stays on screen: 40 dp button + 8 dp padding, anchored at the top end
-            val keep = with(androidx.compose.ui.platform.LocalDensity.current) { 56.dp.toPx() }
-            val maxX = (constraints.maxWidth - keep).coerceAtLeast(0f)
-            val maxY = (constraints.maxHeight - keep * 2).coerceAtLeast(0f)
-            val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
-            fun clamp(o: Offset) = Offset(if (rtl) o.x.coerceIn(0f, maxX) else o.x.coerceIn(-maxX, 0f), o.y.coerceIn(0f, maxY))
-            LaunchedEffect(maxX, maxY) { menuOffset = clamp(menuOffset) }
             led?.takeIf { it.lit && showLed }?.let { LedIndicator(it, Modifier.align(Alignment.TopCenter)) }
             // карточка загрузки
             AnimatedVisibility(
@@ -1003,9 +992,6 @@ class VmActivity : ComponentActivity() {
                     stringResource(if (vncOn.value) R.string.m_vnc_stop else R.string.m_vnc),
                     Icons.Rounded.Cast,
                 ) { toggleVnc() })
-                add(GlassMenuItem(stringResource(R.string.m_reset_menu_pos), Icons.Rounded.RestartAlt) {
-                    menuOffset = Offset.Zero; saveMenuOffset()
-                })
                 add(GlassMenuItem(stringResource(R.string.m_reboot), Icons.Rounded.RestartAlt) { rebootVm() })
                 if (gvm != null) add(GlassMenuItem(
                     stringResource(if (gvm.recoveryMode) R.string.m_reboot_system else R.string.m_reboot_recovery),
@@ -1503,10 +1489,15 @@ class VmActivity : ComponentActivity() {
     companion object {
         const val EXTRA_ID = "id"
         const val EXTRA_RECOVERY = "recovery"
+        const val EXTRA_UNLOCKED = "unlocked"
         /** how long after returning the screen is checked for frames (see [postResumeCheck]) */
         private const val RESUME_CHECK_MS = 8_000L
-        fun start(ctx: Context, id: String, recovery: Boolean = false) {
-            ctx.startActivity(Intent(ctx, VmActivity::class.java).putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery)
+        fun start(ctx: Context, id: String, recovery: Boolean = false, unlocked: Boolean = false) {
+            // The home page asks for the password before calling us. A shortcut or any other
+            // direct launch must not be able to skip that check.
+            if (app.andropaw.core.MachineLock.isLocked(ctx, id) && !unlocked) return
+            ctx.startActivity(Intent(ctx, VmActivity::class.java)
+                .putExtra(EXTRA_ID, id).putExtra(EXTRA_RECOVERY, recovery).putExtra(EXTRA_UNLOCKED, unlocked)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }

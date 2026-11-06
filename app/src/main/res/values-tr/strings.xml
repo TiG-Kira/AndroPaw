@@ -204,7 +204,6 @@
     <string name="nav_search">Ara</string>
     <string name="nav_dpad">İztopu</string>
     <string name="m_minimize">Küçült</string>
-    <string name="m_reset_menu_pos">Menü düğmesini sıfırla</string>
     <string name="m_record">Ekranı kaydet</string>
     <string name="m_record_stop">Kaydı durdur</string>
     <string name="m_vnc">VNC sunucusunu başlat</string>

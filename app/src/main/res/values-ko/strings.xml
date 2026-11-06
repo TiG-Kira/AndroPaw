@@ -204,7 +204,6 @@
     <string name="nav_search">검색</string>
     <string name="nav_dpad">트랙볼</string>
     <string name="m_minimize">최소화</string>
-    <string name="m_reset_menu_pos">메뉴 버튼 위치 초기화</string>
     <string name="m_record">화면 녹화</string>
     <string name="m_record_stop">녹화 중지</string>
     <string name="m_vnc">VNC 서버 시작</string>

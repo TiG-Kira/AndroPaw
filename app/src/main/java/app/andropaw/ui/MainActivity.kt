@@ -118,6 +118,81 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 const val ACTION_BOOT = "app.andropaw.BOOT"
 
+/** AEmulator Pro: a locked machine asks for its password before the window opens. */
+private fun askMachinePassword(ctx: Context, id: String) {
+    val input = android.widget.EditText(ctx).apply {
+        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        hint = ctx.getString(R.string.pro_password_hint)
+    }
+    val box = android.widget.LinearLayout(ctx).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        setPadding(48, 24, 48, 0)
+        addView(input)
+    }
+    android.app.AlertDialog.Builder(ctx)
+        .setTitle(ctx.getString(R.string.pro_password_title))
+        .setView(box)
+        .setNegativeButton(R.string.cancel, null)
+        .setPositiveButton(R.string.start) { _, _ ->
+            val pw = input.text.toString().toCharArray()
+            val ok = app.andropaw.core.MachineLock.verify(ctx, id, pw)
+            pw.fill('\u0000')
+            if (ok) VmActivity.start(ctx, id, unlocked = true)
+            else android.widget.Toast.makeText(ctx, R.string.pro_password_wrong, android.widget.Toast.LENGTH_SHORT).show()
+        }
+        .show()
+}
+
+/** Machine card menu: set, change or remove that machine's password. */
+private fun editMachinePassword(ctx: Context, img: app.andropaw.core.GuestImage) {
+    val lock = app.andropaw.core.MachineLock
+    if (!lock.isLocked(ctx, img.id)) { newMachinePassword(ctx, img.id); return }
+    android.app.AlertDialog.Builder(ctx)
+        .setTitle(ctx.getString(R.string.pro_password_manage, img.name))
+        .setItems(arrayOf(ctx.getString(R.string.pro_password_change), ctx.getString(R.string.pro_password_remove))) { _, which ->
+            if (which == 1) {
+                lock.clear(ctx, img.id)
+                android.widget.Toast.makeText(ctx, R.string.pro_password_removed, android.widget.Toast.LENGTH_SHORT).show()
+            } else newMachinePassword(ctx, img.id)
+        }
+        .setNegativeButton(R.string.cancel, null)
+        .show()
+}
+
+private fun newMachinePassword(ctx: Context, id: String) {
+    fun field(hintRes: Int) = android.widget.EditText(ctx).apply {
+        inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        hint = ctx.getString(hintRes)
+    }
+    val a = field(R.string.pro_password_new)
+    val b = field(R.string.pro_password_repeat)
+    val box = android.widget.LinearLayout(ctx).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        setPadding(48, 24, 48, 0)
+        addView(a); addView(b)
+    }
+    android.app.AlertDialog.Builder(ctx)
+        .setTitle(R.string.pro_password_set_title)
+        .setView(box)
+        .setNegativeButton(R.string.cancel, null)
+        .setPositiveButton(android.R.string.ok) { _, _ ->
+            val p = a.text.toString()
+            val q = b.text.toString()
+            when {
+                p.isEmpty() -> android.widget.Toast.makeText(ctx, R.string.pro_password_empty, android.widget.Toast.LENGTH_SHORT).show()
+                p != q -> android.widget.Toast.makeText(ctx, R.string.pro_password_mismatch, android.widget.Toast.LENGTH_SHORT).show()
+                else -> {
+                    val pw = p.toCharArray()
+                    app.andropaw.core.MachineLock.set(ctx, id, pw)
+                    pw.fill('\u0000')
+                    android.widget.Toast.makeText(ctx, R.string.pro_password_saved, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        .show()
+}
+
+
 class MainActivity : ComponentActivity() {
     private val model: LibraryModel by viewModels()
 
@@ -436,7 +511,11 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                             baseName = images.firstOrNull { it.id == img.baseId }?.name,
                             modifier = Modifier.animateItem(),
                             running = runningId == img.id,
-                            onStart = { VmActivity.start(ctx, img.id) },
+                            onStart = {
+                                if (app.andropaw.core.MachineLock.isLocked(ctx, img.id))
+                                    askMachinePassword(ctx, img.id)
+                                else VmActivity.start(ctx, img.id)
+                            },
                             onMenu = { anchor -> cardMenu = img to anchor },
                         )
                     }
@@ -585,6 +664,12 @@ fun Library(model: LibraryModel, onRestyle: () -> Unit) {
                     GlassPopupItem(text = stringResource(R.string.rename), icon = Icons.Rounded.Edit, onClick = { cardMenu = null; renameFor = img })
                     GlassPopupItem(text = stringResource(R.string.new_machine), icon = Icons.Rounded.ContentCopy, onClick = { cardMenu = null; containerFrom = img })
                     GlassPopupItem(text = stringResource(R.string.reset_data), icon = Icons.Rounded.RestartAlt, onClick = { cardMenu = null; resetFor = img })
+                    GlassPopupItem(
+                        text = stringResource(if (app.andropaw.core.MachineLock.isLocked(ctx, img.id))
+                            R.string.pro_password_change_row else R.string.pro_password_set_row),
+                        icon = Icons.Rounded.Shield,
+                        onClick = { cardMenu = null; editMachinePassword(ctx, img) },
+                    )
                     GlassPopupItem(text = stringResource(R.string.delete), icon = Icons.Rounded.Delete, onClick = { cardMenu = null; deleteFor = img })
                 }
             }

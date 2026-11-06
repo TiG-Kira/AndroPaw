@@ -530,7 +530,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             val f = File(paths.root, "dev/.aemu-ram")
             if (kernel.ramBudget) f.writeText((GuestRunner.guestRamMb(img.api, s.ramMb) * 1024L).toString()) else f.delete()
         }
-        lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb).also { it.start() }
+        val guard = ProFeatures.GuardLevel.of(app.andropaw.AppPrefs.proGuardLevel(ctx))
+        lmk = GuestLmk(paths.root, s.lowRam, ::log, s.ramMb, guard.warn, guard.safe).also { it.start() }
         val netCfg = if (s.netProxy) net.start() else GuestRunner.NetConfig()
         runner.sdcardHost = sd
         val r = GuestRunner(paths, img, netCfg.copy(glPath = if (s.gpu) "/dev/socket/gl" else null)).also {
@@ -1848,9 +1849,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                 file.seek(file.length() - size)
                 ByteArray(size).also { file.readFully(it) }.toString(Charsets.UTF_8)
             } }.getOrDefault("")
+        val children = lmk?.processCount ?: 0
         log("zygote-exit: service=$name code=$code bootCompleted=${bootDoneAt > 0} planned=$plannedRestart " +
-            "requestedKill=${zygoteKillReason ?: "none"} hostAdj=$hostAdj guestLmkKills=${lmk?.kills ?: 0}; $memory")
+            "requestedKill=${zygoteKillReason ?: "none"} hostAdj=$hostAdj guestLmkKills=${lmk?.kills ?: 0} " +
+            "guestProcesses=$children/${GuestLmk.PHANTOM_PROCESS_LIMIT}; $memory")
         if (tail.isNotBlank()) log("zygote-exit: last output: $tail")
+        // A SIGKILL with a full child-process table and plenty of free RAM is the signature of
+        // Android 12+'s Phantom Process Killer, not of the host low-memory killer. Say so in the
+        // log: the fix is a host setting, and without this line users keep chasing OOM theories.
+        if (code == 137 && zygoteKillReason == null && children >= GuestLmk.PHANTOM_SAFE_LIMIT) {
+            log("zygote-exit: 子进程数已达宿主上限，且并非我们主动重启 → 大概率是 Android 12+ 幽灵进程杀手（Phantom Process Killer，32 子进程限制）按 uid 成批 SIGKILL，与剩余内存无关。" +
+                "请保持「开发者选项」开启并打开「停止限制子进程 / Disable child process restrictions」；部分 ColorOS/OriginOS 需 adb 执行 settings put global settings_enable_monitor_phantom_procs false")
+        }
         if (name == "zygote") zygoteKillReason = null
     }
 
