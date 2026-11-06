@@ -68,6 +68,7 @@ fun SettingsContent(
     var agentSettings by remember { mutableStateOf(false) }
     var phantomGuide by remember { mutableStateOf(false) }
     var proFeaturesDialog by remember { mutableStateOf(false) }
+    var probeReport by remember { mutableStateOf<String?>(null) }
     var defaults by remember { mutableStateOf(AppPrefs.defaults(ctx)) }
     var theme by remember { mutableStateOf(AppPrefs.theme(ctx)) }
     var dynamic by remember { mutableStateOf(AppPrefs.dynamicColor(ctx)) }
@@ -85,6 +86,7 @@ fun SettingsContent(
         item { AboutCard(onClick = onAbout) }
 
         item {
+            var autoRestart by remember { mutableStateOf(AppPrefs.hostKillAutoRestart(ctx)) }
             val pm = ctx.getSystemService(android.os.PowerManager::class.java)
             val batteryOk = pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
             val phantom = HostInfo.phantomState(ctx)
@@ -112,6 +114,27 @@ fun SettingsContent(
                                 android.net.Uri.parse("package:${ctx.packageName}")))
                         }
                     },
+                )
+                Toggle(
+                    stringResource(R.string.host_autorestart),
+                    stringResource(R.string.host_autorestart_sub),
+                    autoRestart,
+                ) { autoRestart = it; AppPrefs.setHostKillAutoRestart(ctx, it) }
+                ArrowPreference(
+                    title = stringResource(R.string.host_probe_run),
+                    summary = stringResource(R.string.host_probe_run_sub),
+                    startAction = { Icon(Icons.Rounded.Tune, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = {
+                        app.andropaw.core.HostProcessProbe.start(ctx)
+                        android.widget.Toast.makeText(ctx, R.string.host_probe_started,
+                            android.widget.Toast.LENGTH_LONG).show()
+                    },
+                )
+                ArrowPreference(
+                    title = stringResource(R.string.host_probe_result),
+                    summary = stringResource(R.string.host_probe_result_sub),
+                    startAction = { Icon(Icons.Rounded.AutoAwesome, null, tint = MiuixTheme.colorScheme.primary) },
+                    onClick = { probeReport = app.andropaw.core.HostProcessProbe.report(ctx) },
                 )
             }
         }
@@ -274,6 +297,25 @@ fun SettingsContent(
             }
             DialogButtonRow(listOf(
                 DialogAction(stringResource(R.string.done), onClick = { proFeaturesDialog = false }),
+            ))
+        }
+    }
+
+    val probe = probeReport
+    if (probe != null) {
+        MiuixDialog(
+            show = true,
+            title = stringResource(R.string.host_probe_result),
+            onDismissRequest = { probeReport = null },
+        ) {
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                item {
+                    Text(probe, fontSize = 11.sp, lineHeight = 16.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                }
+            }
+            DialogButtonRow(listOf(
+                DialogAction(stringResource(R.string.done), onClick = { probeReport = null }),
             ))
         }
     }

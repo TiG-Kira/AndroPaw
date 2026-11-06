@@ -214,7 +214,21 @@ class VmActivity : ComponentActivity() {
                 }
             VmHost.session = AndroidSession(gvm)
             session = VmHost.session!!
-            gvm.onPower = { reboot, reason -> runOnUiThread { if (reboot) rebootVm(reason == "recovery") else stopVm() } }
+            gvm.onPower = { reboot, reason -> runOnUiThread {
+                when (reason) {
+                    "host kill restart" -> {
+                        android.widget.Toast.makeText(this@VmActivity, R.string.vm_host_kill_restart,
+                            android.widget.Toast.LENGTH_LONG).show()
+                        rebootVm(false)
+                    }
+                    "host kill give up" -> {
+                        android.widget.Toast.makeText(this@VmActivity, R.string.vm_host_kill_give_up,
+                            android.widget.Toast.LENGTH_LONG).show()
+                        stopVm()
+                    }
+                    else -> if (reboot) rebootVm(reason == "recovery") else stopVm()
+                }
+            } }
             // 大量 137：只提示，不擅自恢复（用户决策）
             gvm.onMassDeath = { runOnUiThread { massDeathNotice.value = true } }
             // 软重启会换掉 surfaceflinger：让显示视图重新绑定，避免画面停在旧帧
@@ -1023,12 +1037,12 @@ class VmActivity : ComponentActivity() {
                     Column {
                         Text("检测到模拟器进程成批退出", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                         Spacer(Modifier.height(2.dp))
-                        Text("可以让 guest 的 init 自行恢复，或直接冷重启机器。",
+                        Text("宿主终止了部分模拟器进程。建议整机重启，不要在残缺的进程树上反复恢复。",
                             fontSize = 12.sp, color = MiuixTheme.colorScheme.onSurface.copy(alpha = 0.7f))
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(text = "等待自救", onClick = { massDeathNotice.value = false })
-                            TextButton(text = "冷重启", onClick = { massDeathNotice.value = false; rebootVm() })
+                            TextButton(text = "整机重启", onClick = { massDeathNotice.value = false; rebootVm() })
+                            TextButton(text = "停止机器", onClick = { massDeathNotice.value = false; stopVm() })
                         }
                     }
                 }

@@ -352,7 +352,7 @@
     <string name="pro_guard_conservative">Conservative</string>
     <string name="pro_guard_standard">Standard</string>
     <string name="pro_guard_aggressive">Aggressive</string>
-    <string name="pro_guard_hint">Applies the next time a machine starts. A lower budget keeps the guest further from the host limit of 32, but swaps cached apps out more often.</string>
+    <string name="pro_guard_hint">Applies the next time a machine starts. A lower budget keeps the guest further from the host limit of 32, caps the cached-app limit inside the guest and disables the USAP pool, but swaps background apps out more often.</string>
     <string name="pro_features_row">Pro capabilities</string>
     <string name="pro_features_row_sub">%1$d capabilities registered</string>
     <string name="pro_features_title">Pro capabilities</string>
@@ -395,4 +395,15 @@
     <string name="pro_password_mismatch">Passwords do not match</string>
     <string name="pro_password_saved">Password saved</string>
     <string name="pro_password_removed">Password removed</string>
+
+    <string name="vm_host_kill_restart">Host killed emulator processes — restarting the whole machine…</string>
+    <string name="vm_host_kill_give_up">Host keeps killing emulator processes; automatic restart stopped. Please start the machine manually.</string>
+    <string name="host_autorestart">Restart after host kills processes</string>
+    <string name="host_autorestart_sub">On an outside SIGKILL, do one clean whole-machine restart (max 2 in 10 min) instead of rebuilding a half-dead process tree.</string>
+
+    <string name="host_probe_run">Run execve survival experiment</string>
+    <string name="host_probe_run_sub">Starts a foreground Service that replaces itself with a shell heartbeat. Does not touch the emulator.</string>
+    <string name="host_probe_result">Experiment result</string>
+    <string name="host_probe_result_sub">Read pid, liveness, oom adj and the last heartbeats.</string>
+    <string name="host_probe_started">Probe started — leave it for 5 minutes, then open experiment result</string>
 </resources>

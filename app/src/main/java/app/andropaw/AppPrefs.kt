@@ -66,6 +66,33 @@ object AppPrefs {
     fun proGuardLevel(ctx: Context): String = sp(ctx).getString("pro_guard_level", "standard") ?: "standard"
     fun setProGuardLevel(ctx: Context, key: String) = sp(ctx).edit().putString("pro_guard_level", key).apply()
 
+    /** When the host kills the guest tree, do one clean machine restart instead of a rebuild loop. */
+    fun hostKillAutoRestart(ctx: Context): Boolean = sp(ctx).getBoolean("host_kill_auto_restart", true)
+    fun setHostKillAutoRestart(ctx: Context, v: Boolean) = sp(ctx).edit().putBoolean("host_kill_auto_restart", v).apply()
+
+    /**
+     * Allow at most two clean restarts per window. The counter lives in preferences on purpose:
+     * GuestVm.stop() wipes every in-memory debounce flag, so an in-process counter would restart
+     * forever on a host (HyperOS etc.) that keeps culling children.
+     */
+    fun allowHostKillRestart(ctx: Context): Boolean {
+        val p = sp(ctx)
+        val now = System.currentTimeMillis()
+        val start = p.getLong("host_kill_window", 0L)
+        val count = p.getInt("host_kill_count", 0)
+        if (start == 0L || now - start > 10 * 60_000L) {
+            p.edit().putLong("host_kill_window", now).putInt("host_kill_count", 1).apply()
+            return true
+        }
+        if (count >= 2) return false
+        p.edit().putInt("host_kill_count", count + 1).apply()
+        return true
+    }
+
+    /** A boot that actually completed resets the window: only consecutive failures count. */
+    fun resetHostKillRestarts(ctx: Context) =
+        sp(ctx).edit().remove("host_kill_window").remove("host_kill_count").apply()
+
     /** Умолчания, которые получает только что импортированная система. */
     fun defaults(ctx: Context): VmSettings {
         val p = sp(ctx)

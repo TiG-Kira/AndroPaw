@@ -57,6 +57,9 @@ object HostInfo {
                     "   adb shell device_config put activity_manager max_phantom_processes 2147483647\n" +
                     "   adb shell device_config set_sync_disabled_for_tests persistent"
         }
-        return steps + "\n\n另外请把 AndroPaw 的省电策略设为「无限制」，并在最近任务里锁定该应用。"
+        return steps + "\n\n注意：部分 HyperOS / ColorOS / Android 16+ 版本不遵守该开关（厂商自行实现进程限制），" +
+            "已关闭仍被杀属正常现象；此时请保持设置页「宿主杀死进程时自动重启」开启，" +
+            "让模拟器走一次干净的整机重启，而不是在残缺的进程树上反复重建。" +
+            "\n\n另外请把 AndroPaw 的省电策略设为「无限制」，并在最近任务里锁定该应用。"
     }
 }

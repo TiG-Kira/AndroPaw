@@ -376,6 +376,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // зигота 4.4+ заранее открывает EGL; дети после fork наследуют соединение моста, и гостевая
         // библиотека моста уходит в бесконечную рекурсию (падение по стеку в каждом приложении)
         if (img.api >= 19) overrides["ro.zygote.disable_gl_preload"] = "1"
+        // The guest's own ActivityManager defaults to 32 cached app processes — exactly the
+        // host's global phantom-process ceiling. Left alone, the guest fills that budget and the
+        // host culls the whole tree. Cap the guest well below our guard thresholds so its AMS
+        // recycles cached apps itself (with proper saved state) instead of being SIGKILLed.
+        // The USAP pool (10+) pre-forks idle processes that count too; some OEM builds enable it.
+        if (img.api >= 21) {
+            val cap = guestCachedAppCap()
+            overrides["ro.sys.fw.bg_apps_limit"] = cap.toString()
+            overrides["ro.vendor.qti.sys.fw.bg_apps_limit"] = cap.toString()
+            overrides["persist.device_config.runtime_native.usap_pool_enabled"] = "false"
+            overrides["dalvik.vm.usap_pool_enabled"] = "false"
+            log("process budget: guest cached-app cap $cap, USAP pool off (host ceiling ${GuestLmk.PHANTOM_PROCESS_LIMIT})")
+        }
         if (engine == Engine.N64) overrides.putAll(kernel.props)
         if (glBridge) {
             overrides["ro.hardware.egl"] = "aemu"
@@ -553,6 +566,7 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         bootDoneAt = 0
         screenUpAt = 0
         everBooted = false; zygoteRestarts = 0; zygoteCrashes.clear()
+        externalKillHandled = false
         setState(State.BOOTING)
 
         // 4. binder
@@ -905,6 +919,9 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if ((k == "sys.boot_completed" || k == "dev.bootcomplete") && v == "1" && bootDoneAt == 0L) {
             bootDoneAt = System.currentTimeMillis()
             everBooted = true
+            // A machine that reached the home screen is healthy: do not count a later kill as
+            // part of the same consecutive-failure window.
+            app.andropaw.AppPrefs.resetHostKillRestarts(ctx)
             lmk?.armed = true   // boot 完成后才允许 GuestLmk 回收后台进程
             startGuestAdbd()    // Agent 技能改走 adb：guest adbd 监听 TCP，宿主 127.0.0.1 直连
             clearRebootNotice()
@@ -992,6 +1009,10 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (start) Thread { runCatching { startService(def) } }.start()
     }
 
+    /** Guest AMS cached-app ceiling: half of our soft guard, clamped to a usable range. */
+    private fun guestCachedAppCap(): Int =
+        (ProFeatures.GuardLevel.of(app.andropaw.AppPrefs.proGuardLevel(ctx)).warn / 2).coerceIn(4, 12)
+
     private fun afterBoot() {
         val r = guestRunner
         if (skipWizardNow()) return   // the system comes up again and gets here once more
@@ -1008,6 +1029,19 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         if (engine == Engine.N64 && kernel.webViewSingleProcess)
             runCatching { guestShell("cmd webviewupdate disable-multiprocess", 30_000) }
         TreeFixer(ctx, paths, img, ::log).noScreenSleep()
+        // ro.sys.fw.bg_apps_limit is read by older / QCOM builds; newer AOSP takes the
+        // DeviceConfig key instead. Set the runtime one after boot so the write is not lost.
+        if (img.api >= 21) {
+            val cap = guestCachedAppCap()
+            val cmd = if (img.api >= 29)
+                "device_config put activity_manager max_cached_processes $cap"
+            else
+                "settings put global activity_manager_constants max_cached_processes=$cap"
+            Thread {
+                runCatching { guestShell(cmd, 30_000) }
+                    .onFailure { log("process budget: could not cap guest cached apps: ${it.message}") }
+            }.apply { isDaemon = true }.start()
+        }
         disableBrokenComponents()
         if (img.api >= 24) runCatching { enableHome() }.onFailure { log("home screen check failed: $it") }
         // plug-ins: their apks installed and their own boot scripts run — off the boot thread,
@@ -1202,15 +1236,18 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                     val code = runCatching { p.exitValue() }.getOrDefault(-1)
                     if (name == "zygote" || name == "zygote_secondary") {
                         logZygoteExit(name, code)
+                        // An outside SIGKILL gets one clean whole-machine restart, never a local rebuild.
+                        if (handleHostKill(code, "zygote/$name")) break@wd
                         // A secondary ABI failure must not tear down the primary framework.
                         if (name == "zygote_secondary") {
                             val attempts = restarts.getOrDefault(name, 0)
-                            if (attempts < 3 && synchronized(procs) { procs["zygote"]?.isAlive == true }) {
+                            if (attempts < 1 && synchronized(procs) { procs["zygote"]?.isAlive == true } &&
+                                waitFor("primary zygote socket", 8_000) { paths.socket("zygote").exists() }) {
                                 restarts[name] = attempts + 1
                                 paths.socket("zygote_secondary").delete()
                                 paths.socket("usap_pool_secondary").delete()
                                 servicePlan().firstOrNull { it.name == name }?.let { runCatching { startService(it) } }
-                            } else log("zygote_secondary: not restarting (primary down or retry limit reached)")
+                            } else log("zygote_secondary: not restarting (a rebuilt secondary aborts; a clean machine boot is needed)")
                             continue
                         }
                         // Setup-wizard and explicit framework restarts are intentional SIGKILLs.
@@ -1252,9 +1289,13 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
                                 // 到阈值先整机重启一次（冷启动往往能救回反复崩的系统），再崩才放弃
                                 if (!zygoteRebootTried && bootDoneAt > 0) {
                                     zygoteRebootTried = true
-                                    log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — rebooting the whole machine once before giving up")
-                                    writeRebootNotice("系统核心进程反复崩溃，正在冷重启模拟器…")
-                                    onPower?.invoke(true, "")
+                                    if (app.andropaw.AppPrefs.allowHostKillRestart(ctx)) {
+                                        log("✖ $name keeps crashing ($recentCrashesIn1Min times in 1 min) — clean whole-machine restart")
+                                        onPower?.invoke(true, "host kill restart")
+                                    } else {
+                                        failure = "system keeps crashing; automatic restart limit reached"
+                                        onPower?.invoke(false, "host kill give up")
+                                    }
                                     break@wd
                                 }
                                 failure = "system keeps crashing: $name exited $recentCrashesIn1Min times in 1 min (${zygoteCrashes.size} times in 10 min, last code $code)" + " | 最近: " + lines.takeLast(3).joinToString(" ; ")
@@ -1284,7 +1325,8 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
         // 之前只认 bootDoneAt，属性没收到时恢复逻辑就彻底失效、系统直接卡死
         (bootDoneAt > 0 || state == State.RUNNING || System.currentTimeMillis() - created > 90_000)) {   // boot 完成前不软重启：Treble HIDL HAL 本就频繁起落
                             sweepExitTimes.clear()
-                            // 只监听 + 通知：不再自动软重启（用户决策——选择权交回用户，snackbar 里选）
+                            if (handleHostKill(137, "mass SIGKILL sweep")) break@wd
+                            // switch off in settings: fall back to asking the user (snackbar only)
                             val now2 = System.currentTimeMillis()
                             if (now2 - lastMassDeathNotice > 30_000) {
                                 lastMassDeathNotice = now2
@@ -1797,6 +1839,37 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
 
     @Volatile private var zygoteKillReason: String? = null
 
+    /**
+     * The host killed part of the guest tree from the outside (Android 12+ Phantom Process Killer
+     * culls an app's forked children by uid; some HyperOS / ColorOS builds ignore the
+     * "disable child process restrictions" toggle entirely).
+     *
+     * A local rebuild only loops: restartZygote() -> cold reboot -> stop() wipes every debounce
+     * counter -> the new VmActivity sees STOPPED and boots again -> killed again. zygote_secondary
+     * also aborts (134) on every rebuild because it is started before the primary binds its sockets.
+     *
+     * Instead do one clean WHOLE-MACHINE restart: that goes through doBoot()'s full orchestration
+     * (service waits, delays, integrity checks), which is the only path the secondary zygote works
+     * on. The restart count is persisted and capped, so a host that keeps killing never loops.
+     */
+    @Volatile private var externalKillHandled = false
+    private fun handleHostKill(code: Int, where: String): Boolean {
+        if (stopping || externalKillHandled) return true
+        // Intentional SIGKILLs (setup wizard, freeze watchdog, surfaceflinger restart) are ours.
+        if (code != 137 || plannedRestart || zygoteKillReason != null) return false
+        if (!app.andropaw.AppPrefs.hostKillAutoRestart(ctx)) return false
+        externalKillHandled = true
+        val allowed = app.andropaw.AppPrefs.allowHostKillRestart(ctx)
+        val action = if (allowed) "clean whole-machine restart" else "restart limit reached, stopping"
+        log("✖ $where: external SIGKILL (137), guestProcesses=${lmk?.processCount ?: 0}/${GuestLmk.PHANTOM_PROCESS_LIMIT} — $action")
+        if (allowed) runCatching { onPower?.invoke(true, "host kill restart") }
+        else {
+            failure = "host keeps killing guest processes; automatic restart limit reached"
+            runCatching { onPower?.invoke(false, "host kill give up") }
+        }
+        return true
+    }
+
     private fun requestZygoteRestart(reason: String) {
         val process = synchronized(procs) { procs["zygote"]?.takeIf { it.isAlive } } ?: return
         val pid = pidOf(process) ?: return
@@ -1831,10 +1904,14 @@ class GuestVm(val ctx: Context, val img: GuestImage) {
             runCatching { startService(h) }
         }
         runCatching { startService(z) }
-        plan.firstOrNull { it.name == "zygote_secondary" }?.let { z2 ->
-            synchronized(procs) { procs.remove("zygote_secondary") }?.let { runCatching { it.destroyForcibly() } }
-            runCatching { startService(z2) }
-        }
+        // The 32-bit zygote aborts (134) when it starts before the primary has bound its sockets.
+        // The first boot waits for every service socket; a rebuild used to fire both immediately.
+        if (waitFor("zygote socket after rebuild", 15_000) { paths.socket("zygote").exists() }) {
+            plan.firstOrNull { it.name == "zygote_secondary" }?.let { z2 ->
+                synchronized(procs) { procs.remove("zygote_secondary") }?.let { runCatching { it.destroyForcibly() } }
+                runCatching { startService(z2) }
+            }
+        } else log("zygote rebuild: primary socket never came up, skipping zygote_secondary")
     }
 
     private fun logZygoteExit(name: String, code: Int) {

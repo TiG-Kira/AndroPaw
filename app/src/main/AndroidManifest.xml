@@ -96,6 +96,12 @@
                 android:value="Keeps the emulated Android system running" />
         </service>
 
+        <!-- experiment only: does an AMS component process survive Os.execve()? -->
+        <service
+            android:name=".core.HostProcessProbe"
+            android:exported="false"
+            android:process=":probe" />
+
         <service
             android:name="dev.lk.dhd.BinderSlot"
             android:exported="false"
